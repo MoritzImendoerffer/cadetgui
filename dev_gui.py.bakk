@@ -1,0 +1,36 @@
+"""Entry script for CADET-Process Estimator GUI.
+
+Run with:
+    python dev_gui.py
+    
+Or with panel serve:
+    panel serve dev_gui.py --show --autoreload
+"""
+
+import sys
+from pathlib import Path
+
+# Add parent directory to path so cadetgui package can be imported
+# (assumes this script is inside the cadetgui folder)
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+
+import panel as pn
+from cadetgui.gui import EstimatorApp
+
+# Optional: Set your CADET installation path here
+# CADET_PATH = "/path/to/cadet/bin"
+CADET_PATH = None  # Set to auto-detect
+
+# Create the app
+app = EstimatorApp(cadet_path=CADET_PATH)
+
+# For panel serve
+app.panel().servable()
+
+if __name__ == "__main__":
+    pn.serve(
+        app.panel(),
+        port=5006,
+        show=True,
+        autoreload=False,
+    )

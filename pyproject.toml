@@ -1,0 +1,55 @@
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "cadetgui"
+version = "0.1.0"
+description = "GUI for CADET-Process parameter estimation"
+readme = "README.md"
+requires-python = ">=3.10"
+license = {text = "MIT"}
+authors = [
+    {name = "Moritz Imendoerffer"}
+]
+keywords = ["chromatography", "parameter estimation", "CADET", "simulation"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Science/Research",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Scientific/Engineering :: Chemistry",
+]
+
+dependencies = [
+    "pandas>=2.0",
+    "openpyxl>=3.1",
+    "panel>=1.0",
+    "param>=2.0",
+    "numpy>=1.24",
+]
+
+[project.optional-dependencies]
+cadet = [
+    "cadet-process>=0.9",
+]
+dev = [
+    "pytest>=7.0",
+    "matplotlib>=3.7",
+]
+all = [
+    "cadetgui[cadet,dev]",
+]
+
+[project.urls]
+Homepage = "https://github.com/MoritzImendoerffer/cadetgui"
+
+[tool.setuptools.packages.find]
+include = ["cadetgui*"]
+
+[tool.pytest.ini_options]
+testpaths = ["cadetgui/tests"]
+python_files = ["test_*.py"]
