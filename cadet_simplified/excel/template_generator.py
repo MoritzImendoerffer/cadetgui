@@ -14,6 +14,7 @@ from ..operation_modes import (
     ParameterType,
     SUPPORTED_COLUMN_MODELS,
     SUPPORTED_BINDING_MODELS,
+    OPERATION_MODES
 )
 
 
@@ -39,7 +40,7 @@ class ExcelTemplateGenerator:
     
     def __init__(
         self,
-        operation_mode: BaseOperationMode,
+        operation_mode: str,
         column_model: str,
         binding_model: str,
         n_components: int,
@@ -61,14 +62,17 @@ class ExcelTemplateGenerator:
             Names for each component. If not provided, defaults to
             ["Salt", "Component_1", "Component_2", ...]
         """
+        
         if column_model not in SUPPORTED_COLUMN_MODELS:
-            raise ValueError(f"Unknown column model: {column_model}")
+            raise ValueError(f"Unknown column model: {column_model}, supported are {SUPPORTED_COLUMN_MODELS}")
         if binding_model not in SUPPORTED_BINDING_MODELS:
-            raise ValueError(f"Unknown binding model: {binding_model}")
+            raise ValueError(f"Unknown binding model: {binding_model}, supported are {SUPPORTED_BINDING_MODELS}")
+        if operation_mode not in OPERATION_MODES:
+            raise ValueError(f"Unknown operation mode: {operation_mode}, supported are {OPERATION_MODES}")
         if n_components < 2:
             raise ValueError("Need at least 2 components (salt + 1 protein)")
         
-        self.operation_mode = operation_mode
+        self.operation_mode = OPERATION_MODES[operation_mode]()
         self.column_model = column_model
         self.binding_model = binding_model
         self.n_components = n_components

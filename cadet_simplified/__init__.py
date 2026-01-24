@@ -57,7 +57,7 @@ from .storage import (
 
 from .simulation import (
     SimulationRunner,
-    SimulationResult,
+    SimulationResultWrapper,
     ValidationResult,
     validate_and_report,
 )
@@ -89,7 +89,7 @@ __all__ = [
     'ExperimentSet',
     # Simulation
     'SimulationRunner',
-    'SimulationResult',
+    'SimulationResultWrapper',
     'ValidationResult',
     'validate_and_report',
 ]

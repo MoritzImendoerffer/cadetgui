@@ -12,6 +12,10 @@ from dataclasses import dataclass, field
 from typing import Any
 from enum import Enum
 
+from addict import Dict
+
+from CADETProcess import processModel
+from CADETProcess.processModel.unitOperation import ChromatographicColumnBase
 
 class ParameterType(Enum):
     """Type of parameter for Excel template generation."""
@@ -67,19 +71,34 @@ class ColumnBindingConfig:
 
 
 # Supported models registry
-SUPPORTED_COLUMN_MODELS = {
-    'GeneralRateModel': 'CADETProcess.processModel.GeneralRateModel',
-    'LumpedRateModelWithPores': 'CADETProcess.processModel.LumpedRateModelWithPores',
-    'LumpedRateModelWithoutPores': 'CADETProcess.processModel.LumpedRateModelWithoutPores',
-}
+class ModelRegistry(dict):
+    """Registry supporting both dict and attribute access
+    Provides basic autocompletion at runtime in terminal or juypter cell
+    """
+    
+    def __init__(self, models_dict):
+        super().__init__(models_dict)
+        # Dynamically add attributes for autocomplete
+        for key, value in models_dict.items():
+            setattr(self, key, value)
+    
+    def __repr__(self):
+        return f"Available: {list(self.keys())}"
+     
+SUPPORTED_BINDING_MODELS = dict()
+for name in processModel.binding.__all__:
+    pm = getattr(processModel, name)
+    SUPPORTED_BINDING_MODELS[name] = pm.__module__ + "." + name
+SUPPORTED_BINDING_MODELS = ModelRegistry(SUPPORTED_BINDING_MODELS)
 
-SUPPORTED_BINDING_MODELS = {
-    'StericMassAction': 'CADETProcess.processModel.StericMassAction',
-    'GeneralizedIonExchange': 'CADETProcess.processModel.GeneralizedIonExchange',
-    'Langmuir': 'CADETProcess.processModel.Langmuir',
-}
-
-
+SUPPORTED_COLUMN_MODELS = dict()
+for name in processModel.unitOperation.__all__:
+    uo = getattr(processModel.unitOperation, name)
+    if issubclass(uo, processModel.unitOperation.ChromatographicColumnBase):
+        if uo is not processModel.unitOperation.ChromatographicColumnBase:
+            SUPPORTED_COLUMN_MODELS[name] = uo.__module__ + "." + name
+SUPPORTED_COLUMN_MODELS = ModelRegistry(SUPPORTED_COLUMN_MODELS)           
+            
 class BaseOperationMode(ABC):
     """Abstract base class for operation modes.
     
@@ -246,7 +265,7 @@ class BaseOperationMode(ABC):
             
             # Use CADET-Process check_config
             if not process.check_config():
-                # check_config prints warnings, but we need to capture them
+                # TODO check_config prints warnings, catpure them
                 # For now, add a generic message
                 errors.append("Process configuration check failed. Check parameter values.")
                 
@@ -255,9 +274,7 @@ class BaseOperationMode(ABC):
         
         return errors
     
-    # =========================================================================
-    # Introspection helpers (using parameter_introspection module)
-    # =========================================================================
+    # Introspection helpers
     
     def _get_model_class(self, class_path: str) -> type:
         """Import and return class from dotted path."""
@@ -289,137 +306,27 @@ class BaseOperationMode(ABC):
     
     def _introspect_column_parameters(self, column_model: str) -> list[ParameterDefinition]:
         """Introspect column model for scalar parameters."""
-        try:
-            from .parameter_introspection import get_column_model_parameters
-            scalar_params, _ = get_column_model_parameters(column_model, n_comp=2)
-            return [self._convert_to_parameter_definition(p) for p in scalar_params]
-        except ImportError:
-            return self._get_predefined_column_parameters(column_model)
+        from .parameter_introspection import get_column_model_parameters
+        scalar_params, _ = get_column_model_parameters(column_model, n_comp=2)
+        return [self._convert_to_parameter_definition(p) for p in scalar_params]
     
     def _introspect_component_column_parameters(self, column_model: str) -> list[ParameterDefinition]:
         """Introspect column model for per-component parameters."""
-        try:
-            from .parameter_introspection import get_column_model_parameters
-            _, per_comp_params = get_column_model_parameters(column_model, n_comp=2)
-            return [self._convert_to_parameter_definition(p) for p in per_comp_params]
-        except ImportError:
-            return self._get_predefined_component_column_parameters(column_model)
-    
+        from .parameter_introspection import get_column_model_parameters
+        _, per_comp_params = get_column_model_parameters(column_model, n_comp=2)
+        return [self._convert_to_parameter_definition(p) for p in per_comp_params]
+
     def _introspect_binding_parameters(self, binding_model: str) -> list[ParameterDefinition]:
         """Introspect binding model for scalar parameters."""
-        try:
-            from .parameter_introspection import get_binding_model_parameters
-            scalar_params, _ = get_binding_model_parameters(binding_model, n_comp=2)
-            return [self._convert_to_parameter_definition(p) for p in scalar_params]
-        except ImportError:
-            return self._get_predefined_binding_parameters(binding_model)
+        from .parameter_introspection import get_binding_model_parameters
+        scalar_params, _ = get_binding_model_parameters(binding_model, n_comp=2)
+        return [self._convert_to_parameter_definition(p) for p in scalar_params]
     
     def _introspect_component_binding_parameters(self, binding_model: str) -> list[ParameterDefinition]:
         """Introspect binding model for per-component parameters."""
-        try:
-            from .parameter_introspection import get_binding_model_parameters
-            _, per_comp_params = get_binding_model_parameters(binding_model, n_comp=2)
-            return [self._convert_to_parameter_definition(p) for p in per_comp_params]
-        except ImportError:
-            return self._get_predefined_component_binding_parameters(binding_model)
+        from .parameter_introspection import get_binding_model_parameters
+        _, per_comp_params = get_binding_model_parameters(binding_model, n_comp=2)
+        return [self._convert_to_parameter_definition(p) for p in per_comp_params]
+
     
-    # =========================================================================
-    # Predefined parameters (fallback when CADET-Process not available)
-    # =========================================================================
-    
-    def _get_predefined_column_parameters(self, column_model: str) -> list[ParameterDefinition]:
-        """Get predefined column parameters when introspection unavailable."""
-        params = [
-            ParameterDefinition(name='length', display_name='Length', unit='cm', 
-                              description='Column length', default=10.0),
-            ParameterDefinition(name='diameter', display_name='Diameter', unit='cm',
-                              description='Column diameter', default=1.0),
-            ParameterDefinition(name='bed_porosity', display_name='Bed Porosity', unit='-',
-                              description='Interstitial porosity', default=0.37),
-            ParameterDefinition(name='axial_dispersion', display_name='Axial Dispersion', unit='m²/s',
-                              description='Axial dispersion coefficient', default=1e-7),
-        ]
-        
-        # Add model-specific parameters
-        if column_model != 'LumpedRateModelWithoutPores':
-            params.extend([
-                ParameterDefinition(name='particle_porosity', display_name='Particle Porosity', unit='-',
-                                  description='Intraparticle porosity', default=0.33),
-                ParameterDefinition(name='particle_radius', display_name='Particle Radius', unit='µm',
-                                  description='Particle radius', default=34.0),
-            ])
-        else:
-            params.append(
-                ParameterDefinition(name='total_porosity', display_name='Total Porosity', unit='-',
-                                  description='Total porosity', default=0.6),
-            )
-        
-        return params
-    
-    def _get_predefined_component_column_parameters(self, column_model: str) -> list[ParameterDefinition]:
-        """Get predefined per-component column parameters."""
-        params = [
-            ParameterDefinition(name='film_diffusion', display_name='Film Diffusion', unit='m/s',
-                              description='Film mass transfer coefficient',
-                              param_type=ParameterType.PER_COMPONENT),
-        ]
-        
-        if column_model != 'LumpedRateModelWithoutPores':
-            params.append(
-                ParameterDefinition(name='pore_diffusion', display_name='Pore Diffusion', unit='m²/s',
-                                  description='Pore diffusion coefficient',
-                                  param_type=ParameterType.PER_COMPONENT),
-            )
-        
-        return params
-    
-    def _get_predefined_binding_parameters(self, binding_model: str) -> list[ParameterDefinition]:
-        """Get predefined binding parameters."""
-        params = [
-            ParameterDefinition(name='is_kinetic', display_name='Is Kinetic', unit='-',
-                              description='Use kinetic binding', default=True),
-        ]
-        
-        if binding_model == 'StericMassAction':
-            params.append(
-                ParameterDefinition(name='capacity', display_name='Capacity', unit='mM',
-                                  description='Ion exchange capacity', default=1200.0),
-            )
-        
-        return params
-    
-    def _get_predefined_component_binding_parameters(self, binding_model: str) -> list[ParameterDefinition]:
-        """Get predefined per-component binding parameters."""
-        if binding_model == 'StericMassAction':
-            return [
-                ParameterDefinition(name='adsorption_rate', display_name='Adsorption Rate', unit='1/s',
-                                  description='Adsorption rate constant', param_type=ParameterType.PER_COMPONENT),
-                ParameterDefinition(name='desorption_rate', display_name='Desorption Rate', unit='1/s',
-                                  description='Desorption rate constant', param_type=ParameterType.PER_COMPONENT),
-                ParameterDefinition(name='characteristic_charge', display_name='Characteristic Charge', unit='-',
-                                  description='Characteristic charge (nu)', param_type=ParameterType.PER_COMPONENT),
-                ParameterDefinition(name='steric_factor', display_name='Steric Factor', unit='-',
-                                  description='Steric factor (sigma)', param_type=ParameterType.PER_COMPONENT),
-            ]
-        elif binding_model == 'Langmuir':
-            return [
-                ParameterDefinition(name='adsorption_rate', display_name='Adsorption Rate', unit='1/s',
-                                  description='Adsorption rate constant', param_type=ParameterType.PER_COMPONENT),
-                ParameterDefinition(name='desorption_rate', display_name='Desorption Rate', unit='1/s',
-                                  description='Desorption rate constant', param_type=ParameterType.PER_COMPONENT),
-                ParameterDefinition(name='capacity', display_name='Capacity', unit='mM',
-                                  description='Maximum binding capacity', param_type=ParameterType.PER_COMPONENT),
-            ]
-        elif binding_model == 'GeneralizedIonExchange':
-            return [
-                ParameterDefinition(name='adsorption_rate', display_name='Adsorption Rate', unit='1/s',
-                                  description='Adsorption rate constant', param_type=ParameterType.PER_COMPONENT),
-                ParameterDefinition(name='desorption_rate', display_name='Desorption Rate', unit='1/s',
-                                  description='Desorption rate constant', param_type=ParameterType.PER_COMPONENT),
-                ParameterDefinition(name='characteristic_charge', display_name='Characteristic Charge', unit='-',
-                                  description='Characteristic charge (nu)', param_type=ParameterType.PER_COMPONENT),
-                ParameterDefinition(name='steric_factor', display_name='Steric Factor', unit='-',
-                                  description='Steric factor (sigma)', param_type=ParameterType.PER_COMPONENT),
-            ]
-        else:
-            return []
+ 

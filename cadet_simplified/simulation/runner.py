@@ -4,14 +4,14 @@ Handles running simulations and collecting results.
 """
 
 from dataclasses import dataclass, field
-from typing import Any
+from typing import Any, Callable
 import traceback
 
 import numpy as np
-
-
+from CADETProcess.simulationResults import SimulationResults
+from CADETProcess.processModel.process import Process
 @dataclass
-class SimulationResult:
+class SimulationResultWrapper:
     """Result of a single simulation."""
     experiment_name: str
     success: bool
@@ -20,6 +20,7 @@ class SimulationResult:
     errors: list[str] = field(default_factory=list)
     warnings: list[str] = field(default_factory=list)
     runtime_seconds: float = 0.0
+    cadet_result: SimulationResults = None
 
 
 @dataclass
@@ -109,6 +110,7 @@ class SimulationRunner:
                         warnings.append(line.strip())
             
             if not is_valid:
+                # TODO, capture the error log from check_config
                 errors.append("Process configuration check failed")
                 
         except Exception as e:
@@ -124,7 +126,7 @@ class SimulationRunner:
             warnings=warnings,
         )
     
-    def run(self, process, experiment_name: str = "unnamed") -> SimulationResult:
+    def run(self, process) -> SimulationResultWrapper:
         """Run a simulation.
         
         Parameters
@@ -136,7 +138,7 @@ class SimulationRunner:
             
         Returns
         -------
-        SimulationResult
+        SimulationResultWrapper
             Simulation results
         """
         import time
@@ -153,7 +155,7 @@ class SimulationRunner:
             runtime = time.time() - start_time
             
             # Extract solution
-            time_array = result.time
+            time_array = result.solution.outlet.outlet.time
             
             # Get outlet solution
             solution = {}
@@ -163,13 +165,14 @@ class SimulationRunner:
                 comp_name = comp.name if hasattr(comp, 'name') else f"Component_{i}"
                 solution[comp_name] = result.solution[outlet.name][f"outlet.c_comp_{i}"]
             
-            return SimulationResult(
-                experiment_name=experiment_name,
+            return SimulationResultWrapper(
+                experiment_name=process.name,
                 success=True,
                 time=time_array,
                 solution=solution,
                 warnings=warnings,
                 runtime_seconds=runtime,
+                cadet_result=result
             )
             
         except Exception as e:
@@ -178,8 +181,8 @@ class SimulationRunner:
             tb = traceback.format_exc()
             errors.append(f"Traceback: {tb}")
             
-            return SimulationResult(
-                experiment_name=experiment_name,
+            return SimulationResultWrapper(
+                experiment_name=process.name,
                 success=False,
                 errors=errors,
                 runtime_seconds=runtime,
@@ -187,33 +190,133 @@ class SimulationRunner:
     
     def run_batch(
         self,
-        processes: list[tuple[Any, str]],
+        processes: list[Process],
         stop_on_error: bool = False,
-    ) -> list[SimulationResult]:
-        """Run multiple simulations.
+        n_cores: int = 1,
+        timeout_per_sim: float | None = None,
+        progress_callback: Callable | None = None,
+    ) -> list[SimulationResultWrapper]:
+        """Run multiple simulations in parallel.
         
         Parameters
         ----------
-        processes : list[tuple[Process, str]]
-            List of (process, experiment_name) tuples
-        stop_on_error : bool
-            If True, stop on first error
-            
+        processes : list[Process]
+            List of process instances to simulate
+        stop_on_error : bool, default=False
+            If True, stop after first error
+        n_cores : int, default=1
+            Number of parallel processes (1 = sequential)
+        timeout_per_sim : float, optional
+            Timeout in seconds for each simulation. If exceeded, simulation
+            is marked as failed.
+        progress_callback : callable, optional
+            Callback with signature: 
+            callback(current: int, total: int, result: SimulationResultWrapper)
+            Called after each simulation completes.
         Returns
         -------
-        list[SimulationResult]
-            Results for each simulation
+        list[SimulationResultWrapper]
+            Results in same order as input processes
         """
-        results = []
+        total = len(processes)
         
-        for process, name in processes:
-            result = self.run(process, name)
-            results.append(result)
+        # Sequential execution
+        if n_cores == 1:
+            sequential_results: list[SimulationResultWrapper] = []
+            for i, process in enumerate(processes):
+                result = self.run(process)
+                sequential_results.append(result)
+                
+                if progress_callback:
+                    progress_callback(i + 1, total, result)
+                
+                if not result.success and stop_on_error:
+                    # Fill remaining with cancelled results
+                    for remaining_process in processes[i + 1:]:
+                        sequential_results.append(SimulationResultWrapper(
+                            experiment_name=remaining_process.name,
+                            success=False,
+                            errors=["Simulation was skipped due to previous error."],
+                        ))
+                    break
             
-            if not result.success and stop_on_error:
-                break
+            return sequential_results
+            
+        # Parallel execution
+        from concurrent.futures import ProcessPoolExecutor, as_completed, TimeoutError
         
-        return results
+        results: dict[int, SimulationResultWrapper] = {}  # Aim: preserve order or returned results
+        completed = 0
+        should_stop = False
+        
+        executor = ProcessPoolExecutor(max_workers=n_cores)
+        
+        try:
+            # Submit all tasks and track their indices
+            future_to_idx = {
+                executor.submit(self.run, process): idx 
+                for idx, process in enumerate(processes)
+            }
+            
+            for future in as_completed(future_to_idx):
+                idx = future_to_idx[future]
+                process = processes[idx]
+                
+                try:
+                    # Wait for result with timeout
+                    result = future.result(timeout=timeout_per_sim)
+                except TimeoutError:
+                    # Timeout occurred - mark as failed
+                    result = SimulationResultWrapper(
+                        experiment_name=process.name,
+                        success=False,
+                        errors=[f"Simulation timed out after {timeout_per_sim}s. C++ process may still be running in background."],
+                        warnings=["Background process termination is not guaranteed."],
+                    )
+                except Exception as e:
+                    # Other execution errors
+                    import traceback
+                    tb = traceback.format_exc()
+                    result = SimulationResultWrapper(
+                        experiment_name=process.name,
+                        success=False,
+                        errors=[f"Execution error: {str(e)}", f"Traceback: {tb}"],
+                    )
+                
+                results[idx] = result
+                completed += 1
+                
+                if progress_callback:
+                    progress_callback(completed, total, result)
+                
+                if not result.success and stop_on_error:
+                    should_stop = True
+                    # Cancel remaining futures
+                    for remaining_future in future_to_idx:
+                        remaining_future.cancel()
+                    break
+        
+        finally:
+            # Clean shutdown - don't wait for cancelled tasks if stopping early
+            executor.shutdown(wait=not should_stop)
+        
+        # Convert dict to ordered list, filling in cancelled simulations
+        # cancelled simulations can occur when stop_on_error is false
+        ordered_results = []
+        for i in range(total):
+            if i in results:
+                # We have a result for this simulation
+                ordered_results.append(results[i])
+            else:
+                # Simulation was cancelled - create error result
+                cancelled_result = SimulationResultWrapper(
+                    experiment_name=processes[i].name,
+                    success=False,
+                    errors=["Simulation was cancelled."],
+                )
+                ordered_results.append(cancelled_result)
+        
+        return ordered_results
 
 
 def validate_and_report(process, experiment_name: str = "unnamed") -> tuple[bool, str]:

@@ -2,14 +2,14 @@
 
 from .runner import (
     SimulationRunner,
-    SimulationResult,
+    SimulationResultWrapper,
     ValidationResult,
     validate_and_report,
 )
 
 __all__ = [
     'SimulationRunner',
-    'SimulationResult',
+    'SimulationResultWrapper',
     'ValidationResult',
     'validate_and_report',
 ]

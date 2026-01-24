@@ -27,7 +27,7 @@ app = SimplifiedCADETApp(
 )
 
 # For panel serve
-app.view().servable()
+#app.view().servable()
 
 if __name__ == "__main__":
     pn.serve(

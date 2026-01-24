@@ -11,6 +11,7 @@ from .base import (
     ExperimentConfig,
     ColumnBindingConfig,
     ComponentDefinition,
+    ModelRegistry,
     SUPPORTED_COLUMN_MODELS,
     SUPPORTED_BINDING_MODELS,
 )
@@ -32,7 +33,7 @@ from .parameter_introspection import (
 OPERATION_MODES = {
     'LWE_concentration_based': LWEConcentrationBased,
 }
-
+OPERATION_MODES = ModelRegistry(OPERATION_MODES)
 
 def get_operation_mode(name: str) -> BaseOperationMode:
     """Get an operation mode instance by name.

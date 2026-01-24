@@ -341,8 +341,9 @@ class SimplifiedCADETApp(param.Parameterized):
             for exp in result.experiments:
                 row = {"name": exp.name}
                 # Add key parameters
+                # TODO remove hardcoding
                 for key in ["flow_rate_cv_min", "load_cv", "wash_cv", "elution_cv", 
-                           "gradient_start_mm", "gradient_end_mm"]:
+                           "gradient_start_mM", "gradient_end_mM"]:
                     if key in exp.parameters:
                         row[key] = exp.parameters[key]
                 exp_data.append(row)
