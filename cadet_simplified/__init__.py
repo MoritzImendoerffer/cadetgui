@@ -9,7 +9,8 @@ Example workflow:
     4. Upload filled template
     5. Validate configuration
     6. Run simulations
-    7. View results
+    7. Browse saved experiments
+    8. Analyze selected experiments
 
 Quick start:
     >>> from cadet_simplified import get_lwe_mode, generate_template
@@ -22,6 +23,17 @@ Quick start:
     ...     component_names=["Salt", "Product", "Impurity1", "Impurity2"],
     ...     output_path="template.xlsx",
     ... )
+
+Storage and analysis:
+    >>> from cadet_simplified.storage import FileResultsStorage
+    >>> from cadet_simplified.analysis import AnalysisView, get_analysis
+    >>> 
+    >>> storage = FileResultsStorage("./experiments")
+    >>> loaded = storage.load_results_by_selection([...], n_workers=4)
+    >>> 
+    >>> view = AnalysisView()
+    >>> analysis = get_analysis("simple")
+    >>> analysis.run(loaded, view)
 """
 
 from .operation_modes import (
@@ -51,6 +63,13 @@ from .excel import (
 )
 
 from .storage import (
+    # Interface
+    ResultsStorageInterface,
+    StoredExperimentInfo,
+    LoadedExperiment,
+    # File-based implementation
+    FileResultsStorage,
+    # Legacy
     ExperimentStore,
     ExperimentSet,
 )
@@ -63,11 +82,22 @@ from .simulation import (
 )
 
 from .results import (
-    ResultsAnalyzer,
+    ResultsExporter,
     InterpolatedChromatogram,
+    # Backwards compatibility
+    ResultsAnalyzer,
 )
 
-__version__ = "0.1.0"
+from .analysis import (
+    AnalysisView,
+    BaseAnalysis,
+    SimpleChromatogramAnalysis,
+    DetailedAnalysis,
+    get_analysis,
+    list_analyses,
+)
+
+__version__ = "0.2.0"
 
 __all__ = [
     # Operation modes
@@ -89,10 +119,11 @@ __all__ = [
     'ExcelParser',
     'ParseResult',
     'parse_excel',
-    # Analysis and Storage
-    'ResultsAnalyzer',
-    'InterpolatedChromatogram',
     # Storage
+    'ResultsStorageInterface',
+    'StoredExperimentInfo',
+    'LoadedExperiment',
+    'FileResultsStorage',
     'ExperimentStore',
     'ExperimentSet',
     # Simulation
@@ -100,4 +131,15 @@ __all__ = [
     'SimulationResultWrapper',
     'ValidationResult',
     'validate_and_report',
+    # Results export
+    'ResultsExporter',
+    'InterpolatedChromatogram',
+    'ResultsAnalyzer',
+    # Analysis
+    'AnalysisView',
+    'BaseAnalysis',
+    'SimpleChromatogramAnalysis',
+    'DetailedAnalysis',
+    'get_analysis',
+    'list_analyses',
 ]

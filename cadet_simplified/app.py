@@ -5,11 +5,14 @@ A streamlined interface with Excel-based configuration:
 2. Download template
 3. Upload filled template
 4. Validate and simulate
+5. Browse saved experiments
+6. Analyse selected experiments
 """
 
 import io
-import json
+import os
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 import panel as pn
 import param
@@ -25,8 +28,12 @@ from .operation_modes import (
     get_operation_mode,
 )
 from .excel import ExcelTemplateGenerator, ExcelParser, ParseResult
-from .storage import ExperimentStore, ExperimentSet
+from .storage import FileResultsStorage, LoadedExperiment
 from .simulation import SimulationRunner, ValidationResult
+from .analysis import AnalysisView, get_analysis, list_analyses
+
+if TYPE_CHECKING:
+    from .operation_modes import ExperimentConfig, ColumnBindingConfig
 
 
 class SimplifiedCADETApp(param.Parameterized):
@@ -37,6 +44,8 @@ class SimplifiedCADETApp(param.Parameterized):
     2. Template: Download Excel template
     3. Upload: Upload filled template, validate
     4. Simulate: Run simulations, view results
+    5. Saved: Browse and select saved experiments
+    6. Analysis: Analyze selected experiments
     """
     
     # Configuration parameters
@@ -68,22 +77,27 @@ class SimplifiedCADETApp(param.Parameterized):
         self,
         storage_dir: str | Path = "./experiments",
         cadet_path: str | None = None,
+        n_load_workers: int = 4,
         **params
     ):
         super().__init__(**params)
         
         self.storage_dir = Path(storage_dir)
         self.cadet_path = cadet_path
+        self.n_load_workers = n_load_workers
         
         # Initialize storage and runner
-        self.store = ExperimentStore(self.storage_dir)
+        self.storage = FileResultsStorage(self.storage_dir)
         self.runner = SimulationRunner(cadet_path)
         
         # State
         self._current_parse_result: ParseResult | None = None
-        self._current_experiment_set: ExperimentSet | None = None
         self._simulation_results: list = []
         self._component_names: list[str] = self._default_component_names()
+        
+        # Analysis state
+        self._loaded_experiments: list[LoadedExperiment] = []
+        self._analysis_view = AnalysisView()
         
         # Build UI components
         self._build_ui()
@@ -183,43 +197,69 @@ class SimplifiedCADETApp(param.Parameterized):
             sizing_mode='stretch_width',
         )
         
-        # === Tab 4: Results ===
-        self._results_plot = pn.pane.Matplotlib(
+        # Quick results plot (for immediate feedback after simulation)
+        self._quick_results_plot = pn.pane.HoloViews(
             None,
-            tight=True,
             sizing_mode='stretch_width',
             height=400,
         )
         
-        self._experiment_selector = pn.widgets.Select(
-            name="Select Experiment",
-            options=[],
-            disabled=True,
-        )
-        self._experiment_selector.param.watch(self._on_experiment_select, 'value')
-        
-        self._results_output = pn.Column(
-            pn.pane.Markdown("*Run simulations to see results*"),
-            sizing_mode='stretch_width',
-        )
-        
-        # === Tab 5: Saved Experiments ===
+        # === Tab 4: Saved Experiments ===
         self._saved_experiments_table = pn.widgets.Tabulator(
             pd.DataFrame(),
-            height=300,
+            height=350,
             sizing_mode='stretch_width',
+            selectable='checkbox',
+            pagination='local',
+            page_size=25,
         )
+        
         self._refresh_saved_btn = pn.widgets.Button(
             name="Refresh",
             button_type="default",
             width=100,
         )
         self._refresh_saved_btn.on_click(self._on_refresh_saved)
-        self._load_saved_btn = pn.widgets.Button(
-            name="Load Selected",
+        
+        self._load_data_btn = pn.widgets.Button(
+            name="Load Selected for Analysis",
             button_type="primary",
+            width=200,
+        )
+        self._load_data_btn.on_click(self._on_load_data)
+        
+        self._load_progress = pn.indicators.Progress(
+            name='Loading',
+            value=0,
+            max=100,
+            sizing_mode='stretch_width',
+            visible=False,
+        )
+        
+        self._loaded_info = pn.pane.Markdown(
+            "*Select experiments and click 'Load Selected for Analysis'*"
+        )
+        
+        # === Tab 5: Analysis ===
+        analysis_options = {a["description"]: a["name"] for a in list_analyses()}
+        self._analysis_type_selector = pn.widgets.Select(
+            name="Analysis Type",
+            options=analysis_options,
+            value=list(analysis_options.values())[0] if analysis_options else None,
+            width=300,
+        )
+        
+        self._analyse_btn = pn.widgets.Button(
+            name="Run Analysis",
+            button_type="success",
             width=150,
             disabled=True,
+        )
+        self._analyse_btn.on_click(self._on_analyse)
+        
+        self._analysis_container = pn.Column(
+            pn.pane.Markdown("*Load experiments from the 'Saved' tab first*"),
+            sizing_mode='stretch_width',
         )
         
         # Status bar
@@ -251,7 +291,6 @@ class SimplifiedCADETApp(param.Parameterized):
     
     def _on_n_components_change(self, event):
         """Handle change in number of components."""
-        # Update default names
         while len(self._component_names) < self.n_components:
             idx = len(self._component_names)
             if idx == 0:
@@ -281,10 +320,7 @@ class SimplifiedCADETApp(param.Parameterized):
                 component_names=component_names,
             )
             
-            # Generate bytes
             template_bytes = generator.to_bytes()
-            
-            # Create download widget
             filename = f"template_{self.operation_mode}_{self.n_components}comp.xlsx"
             
             download_widget = pn.widgets.FileDownload(
@@ -312,7 +348,6 @@ class SimplifiedCADETApp(param.Parameterized):
             return
         
         try:
-            # Parse the uploaded file
             file_bytes = io.BytesIO(event.new)
             parser = ExcelParser()
             result = parser.parse(file_bytes)
@@ -320,7 +355,6 @@ class SimplifiedCADETApp(param.Parameterized):
             self._current_parse_result = result
             
             if not result.success:
-                # Show errors
                 error_md = "### ❌ Parse Errors\n\n"
                 for error in result.errors:
                     error_md += f"- {error}\n"
@@ -339,9 +373,7 @@ class SimplifiedCADETApp(param.Parameterized):
             exp_data = []
             for exp in result.experiments:
                 row = {"name": exp.name}
-                # Add key parameters
-                # TODO remove hardcoding
-                for key in ["flow_rate_cv_min", "load_cv", "wash_cv", "elution_cv", 
+                for key in ["flow_rate_mL_min", "load_cv", "wash_cv", "elution_cv", 
                            "gradient_start_mM", "gradient_end_mM"]:
                     if key in exp.parameters:
                         row[key] = exp.parameters[key]
@@ -350,7 +382,7 @@ class SimplifiedCADETApp(param.Parameterized):
             df = pd.DataFrame(exp_data)
             self._experiments_table.value = df
             
-            # Show column/binding config preview
+            # Show config preview
             if result.column_binding:
                 config_dict = {
                     "column_model": result.column_binding.column_model,
@@ -363,14 +395,12 @@ class SimplifiedCADETApp(param.Parameterized):
                     pn.pane.JSON(config_dict, depth=3, name="Config"),
                 ]
             
-            # Enable validation
             self._validate_btn.disabled = False
             
             n_exp = len(result.experiments)
             self.status = f"Parsed {n_exp} experiment(s). Click 'Validate Configuration' to check."
             self._update_status("info")
             
-            # Show success message
             success_md = f"### ✓ Parsed Successfully\n\n"
             success_md += f"- **{n_exp}** experiments found\n"
             success_md += f"- Column model: {result.column_binding.column_model}\n"
@@ -403,10 +433,7 @@ class SimplifiedCADETApp(param.Parameterized):
         
         for exp in result.experiments:
             try:
-                # Try to create the process
                 process = mode.create_process(exp, result.column_binding)
-                
-                # Validate with CADET-Process
                 val_result = self.runner.validate(process, exp.name)
                 validation_results.append(val_result)
                 
@@ -421,7 +448,6 @@ class SimplifiedCADETApp(param.Parameterized):
                 ))
                 all_valid = False
         
-        # Display validation results
         if all_valid:
             md = "### ✓ All Configurations Valid\n\n"
             for vr in validation_results:
@@ -453,10 +479,7 @@ class SimplifiedCADETApp(param.Parameterized):
         ]
     
     def _on_simulate(self, event):
-        """Run simulations.
-        Currently uses the user homes directory
-        TODO: add an option to define the save path
-        """
+        """Run simulations and save results to storage."""
         if self._current_parse_result is None:
             return
         
@@ -468,21 +491,16 @@ class SimplifiedCADETApp(param.Parameterized):
         self._simulation_progress.value = 0
         
         n_experiments = len(result.experiments)
-        
         output_items = [pn.pane.Markdown("### Simulation Progress\n")]
         
         for i, exp in enumerate(result.experiments):
-            # Update progress
             progress = int((i / n_experiments) * 100)
             self._simulation_progress.value = progress
             self.status = f"Simulating {exp.name} ({i+1}/{n_experiments})..."
             self._update_status("info")
             
             try:
-                # Create process
                 process = mode.create_process(exp, result.column_binding)
-                
-                # Run simulation
                 sim_result = self.runner.run(process)
                 self._simulation_results.append(sim_result)
                 
@@ -491,12 +509,18 @@ class SimplifiedCADETApp(param.Parameterized):
                         pn.pane.Markdown(f"✓ **{exp.name}**: Completed in {sim_result.runtime_seconds:.2f}s")
                     )
                 else:
-                    error_msg = "; ".join(sim_result.errors[:2])  # Show first 2 errors
+                    error_msg = "; ".join(sim_result.errors[:2])
                     output_items.append(
                         pn.pane.Markdown(f"❌ **{exp.name}**: Failed - {error_msg}")
                     )
                     
             except Exception as e:
+                from .simulation import SimulationResultWrapper
+                self._simulation_results.append(SimulationResultWrapper(
+                    experiment_name=exp.name,
+                    success=False,
+                    errors=[str(e)],
+                ))
                 output_items.append(
                     pn.pane.Markdown(f"❌ **{exp.name}**: Error - {str(e)}")
                 )
@@ -504,92 +528,150 @@ class SimplifiedCADETApp(param.Parameterized):
         self._simulation_progress.value = 100
         self._simulation_progress.visible = False
         
-        # Update results
         successful = sum(1 for r in self._simulation_results if r.success)
         self.status = f"Completed: {successful}/{n_experiments} simulations successful."
         self._update_status("success" if successful == n_experiments else "warning")
         
         self._simulation_output.objects = output_items
         
-        # Enable results viewing
-        if successful > 0:
-            exp_names = [r.experiment_name for r in self._simulation_results if r.success]
-            self._experiment_selector.options = exp_names
-            self._experiment_selector.disabled = False
-            if exp_names:
-                self._experiment_selector.value = exp_names[0]
-                self._update_results_plot(exp_names[0])
-        
-        # Save experiment set
+        # Save to storage if any successful
         if successful > 0:
             try:
-                self._current_experiment_set = self.store.save_from_parse_result(
+                # Generate a name based on timestamp
+                from datetime import datetime
+                timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+                set_name = f"Simulation_{timestamp}"
+                
+                set_id = self.storage.save_experiment_set(
+                    name=set_name,
+                    operation_mode=self.operation_mode,
                     experiments=result.experiments,
                     column_binding=result.column_binding,
-                    name=f"Simulation_{len(self.store.list_all())+1}",
-                    operation_mode=self.operation_mode,
+                    results=self._simulation_results,
                 )
+                
+                output_items.append(pn.pane.Markdown(f"\n✓ Results saved. Set ID: `{set_id}`"))
+                output_items.append(pn.pane.Markdown("*Go to the 'Saved' tab to browse and analyze results.*"))
+                self._simulation_output.objects = output_items
+                
             except Exception as e:
-                print(f"Warning: Could not save experiment set: {e}")
+                output_items.append(pn.pane.Markdown(f"\n⚠️ Warning: Could not save results: {e}"))
+                self._simulation_output.objects = output_items
     
-    def _on_experiment_select(self, event):
-        """Handle experiment selection for results viewing."""
-        if event.new:
-            self._update_results_plot(event.new)
+    def _on_refresh_saved(self, event):
+        """Refresh saved experiments table."""
+        try:
+            df = self.storage.list_experiments(limit=25)
+            
+            if df.empty:
+                self._saved_experiments_table.value = pd.DataFrame({
+                    "experiment_set_name": [],
+                    "experiment_name": [],
+                    "created_at": [],
+                    "n_components": [],
+                    "column_model": [],
+                    "binding_model": [],
+                })
+                self._loaded_info.object = "*No saved experiments found. Run some simulations first.*"
+            else:
+                # Select columns for display
+                display_cols = [
+                    "experiment_set_id", "experiment_set_name", "experiment_name",
+                    "created_at", "n_components", "column_model", "binding_model",
+                    "has_results",
+                ]
+                display_df = df[[c for c in display_cols if c in df.columns]].copy()
+                self._saved_experiments_table.value = display_df
+                self._loaded_info.object = f"*{len(df)} experiment(s) available. Select and click 'Load Selected for Analysis'.*"
+                
+        except Exception as e:
+            self._loaded_info.object = f"*Error loading experiments: {e}*"
     
-    def _update_results_plot(self, experiment_name: str):
-        """Update the results plot for selected experiment."""
-        # Find the result
-        result = None
-        for r in self._simulation_results:
-            if r.experiment_name == experiment_name:
-                result = r
-                break
+    def _on_load_data(self, event):
+        """Load selected experiments for analysis."""
+        selection = self._saved_experiments_table.selection
         
-        if result is None or not result.success:
-            self._results_plot.object = None
+        if not selection:
+            self._loaded_info.object = "*No experiments selected. Click checkboxes to select.*"
+            return
+        
+        df = self._saved_experiments_table.value
+        if df is None or df.empty:
+            return
+        
+        # Get selected rows
+        selected_rows = df.iloc[selection]
+        
+        # Build selection list: [(set_id, exp_name), ...]
+        selections = [
+            (row["experiment_set_id"], row["experiment_name"])
+            for _, row in selected_rows.iterrows()
+        ]
+        
+        self._load_progress.visible = True
+        self._load_progress.value = 50
+        self._loaded_info.object = f"*Loading {len(selections)} experiment(s)...*"
+        
+        try:
+            self._loaded_experiments = self.storage.load_results_by_selection(
+                selections=selections,
+                n_workers=self.n_load_workers,
+            )
+            
+            self._load_progress.value = 100
+            self._load_progress.visible = False
+            
+            n_loaded = len(self._loaded_experiments)
+            self._loaded_info.object = f"✓ **{n_loaded}** experiment(s) loaded. Go to 'Analysis' tab to analyze."
+            
+            # Enable analysis button
+            self._analyse_btn.disabled = False
+            
+            # Update analysis tab placeholder
+            self._analysis_container.objects = [
+                pn.pane.Markdown(f"**{n_loaded} experiment(s) loaded.** Select analysis type and click 'Run Analysis'."),
+            ]
+            
+        except Exception as e:
+            self._load_progress.visible = False
+            self._loaded_info.object = f"*Error loading experiments: {e}*"
+            self._analyse_btn.disabled = True
+    
+    def _on_analyse(self, event):
+        """Run selected analysis on loaded experiments."""
+        if not self._loaded_experiments:
+            self._analysis_container.objects = [
+                pn.pane.Alert("No experiments loaded. Go to 'Saved' tab first.", alert_type="warning")
+            ]
+            return
+        
+        analysis_name = self._analysis_type_selector.value
+        if not analysis_name:
             return
         
         try:
-            import matplotlib.pyplot as plt
+            # Clear and run analysis
+            self._analysis_view.clear()
+            analysis = get_analysis(analysis_name)
+            analysis.run(self._loaded_experiments, self._analysis_view)
             
-            fig, ax = plt.subplots(figsize=(10, 6))
-            
-            time = result.time
-            
-            # Plot each component
-            for comp_name, conc in result.solution.items():
-                ax.plot(time / 60, conc, label=comp_name)  # Convert time to minutes
-            
-            ax.set_xlabel("Time (min)")
-            ax.set_ylabel("Concentration (mM)")
-            ax.set_title(f"Chromatogram: {experiment_name}")
-            ax.legend()
-            ax.grid(True, alpha=0.3)
-            
-            plt.tight_layout()
-            self._results_plot.object = fig
+            # Update container
+            self._analysis_container.objects = [self._analysis_view.view()]
             
         except Exception as e:
-            self._results_output.objects = [
-                pn.pane.Markdown(f"Error creating plot: {str(e)}")
+            import traceback
+            tb = traceback.format_exc()
+            self._analysis_container.objects = [
+                pn.pane.Alert(f"Analysis error: {e}", alert_type="danger"),
+                pn.pane.Markdown(f"```\n{tb}\n```"),
             ]
-    
-    def _on_refresh_saved(self, event):
-        """Refresh saved experiments list."""
-        saved = self.store.list_all()
-        if saved:
-            df = pd.DataFrame(saved)
-            self._saved_experiments_table.value = df
-        else:
-            self._saved_experiments_table.value = pd.DataFrame()
     
     def _update_status(self, alert_type: str):
         """Update status pane."""
         self._status_pane.alert_type = alert_type
         self._status_pane.object = self.status
     
-    def view(self) -> pn.viewable:
+    def view(self) -> pn.viewable.Viewable:
         """Create the main application view."""
         # Tab 1: Configuration
         config_tab = pn.Column(
@@ -621,20 +703,26 @@ class SimplifiedCADETApp(param.Parameterized):
             sizing_mode='stretch_width',
         )
         
-        # Tab 4: Results
-        results_tab = pn.Column(
-            pn.pane.Markdown("## 4. View Results"),
-            self._experiment_selector,
-            self._results_plot,
-            self._results_output,
+        # Tab 4: Saved Experiments (was Tab 5)
+        saved_tab = pn.Column(
+            pn.pane.Markdown("## 4. Saved Experiments"),
+            pn.pane.Markdown("*Select experiments to load for analysis*"),
+            pn.Row(self._refresh_saved_btn, self._load_data_btn),
+            self._load_progress,
+            self._saved_experiments_table,
+            self._loaded_info,
             sizing_mode='stretch_width',
         )
         
-        # Tab 5: Saved Experiments
-        saved_tab = pn.Column(
-            pn.pane.Markdown("## Saved Experiment Sets"),
-            pn.Row(self._refresh_saved_btn, self._load_saved_btn),
-            self._saved_experiments_table,
+        # Tab 5: Analysis (new)
+        analysis_tab = pn.Column(
+            pn.pane.Markdown("## 5. Analysis"),
+            pn.Row(
+                self._analysis_type_selector,
+                self._analyse_btn,
+            ),
+            pn.layout.Divider(),
+            self._analysis_container,
             sizing_mode='stretch_width',
         )
         
@@ -643,8 +731,8 @@ class SimplifiedCADETApp(param.Parameterized):
             ("1. Configure", config_tab),
             ("2. Upload", upload_tab),
             ("3. Simulate", simulate_tab),
-            ("4. Results", results_tab),
-            ("5. Saved", saved_tab),
+            ("4. Saved", saved_tab),
+            ("5. Analysis", analysis_tab),
             sizing_mode='stretch_width',
         )
         
@@ -659,7 +747,11 @@ class SimplifiedCADETApp(param.Parameterized):
         return layout
 
 
-def create_app(storage_dir: str = "./experiments", cadet_path: str | None = None):
+def create_app(
+    storage_dir: str = "./experiments",
+    cadet_path: str | None = None,
+    n_load_workers: int = 4,
+) -> SimplifiedCADETApp:
     """Create the application.
     
     Parameters
@@ -668,16 +760,27 @@ def create_app(storage_dir: str = "./experiments", cadet_path: str | None = None
         Directory for storing experiment data
     cadet_path : str, optional
         Path to CADET installation
+    n_load_workers : int, default=4
+        Number of workers for parallel loading
         
     Returns
     -------
     SimplifiedCADETApp
         The application instance
     """
-    return SimplifiedCADETApp(storage_dir=storage_dir, cadet_path=cadet_path)
+    return SimplifiedCADETApp(
+        storage_dir=storage_dir,
+        cadet_path=cadet_path,
+        n_load_workers=n_load_workers,
+    )
 
 
-def serve(storage_dir: str = "./experiments", cadet_path: str | None = None, **kwargs):
+def serve(
+    storage_dir: str = "./experiments",
+    cadet_path: str | None = None,
+    n_load_workers: int = 4,
+    **kwargs
+):
     """Serve the application.
     
     Parameters
@@ -686,10 +789,16 @@ def serve(storage_dir: str = "./experiments", cadet_path: str | None = None, **k
         Directory for storing experiment data
     cadet_path : str, optional
         Path to CADET installation
+    n_load_workers : int, default=4
+        Number of workers for parallel loading
     **kwargs
         Additional arguments passed to pn.serve()
     """
-    app = create_app(storage_dir=storage_dir, cadet_path=cadet_path)
+    app = create_app(
+        storage_dir=storage_dir,
+        cadet_path=cadet_path,
+        n_load_workers=n_load_workers,
+    )
     pn.serve(app.view(), **kwargs)
 
 

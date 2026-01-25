@@ -1,10 +1,17 @@
-"""JSON file-based experiment storage.
+"""JSON file-based experiment storage (legacy).
+
+This module provides the dataclasses used for serialization and a simple
+config-only storage implementation.
+
+For full results storage (including pickled results, chromatograms, H5 files),
+use FileResultsStorage from storage.file_storage instead.
 
 Stores experiment configurations and results in JSON files.
 Each experiment set (from one Excel upload) is stored as a single JSON file.
 """
 
 import json
+import warnings
 from dataclasses import dataclass, field, asdict
 from datetime import datetime
 from pathlib import Path
@@ -134,9 +141,14 @@ class ExperimentSet:
 
 
 class ExperimentStore:
-    """File-based storage for experiment sets.
+    """File-based storage for experiment sets (config only, legacy).
+    
+    .. deprecated::
+        Use FileResultsStorage for full results storage including
+        pickled SimulationResultWrapper, chromatograms, and H5 files.
     
     Each experiment set is stored as a JSON file in the storage directory.
+    This class only stores configurations, not simulation results.
     
     Example:
         >>> store = ExperimentStore("./experiments")
@@ -169,7 +181,7 @@ class ExperimentStore:
         operation_mode: str,
         description: str = "",
     ) -> ExperimentSet:
-        """Save experiments from a parsed Excel file.
+        """Save experiments from a parsed Excel file (config only).
         
         Parameters
         ----------
