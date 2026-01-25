@@ -271,11 +271,10 @@ class SimplifiedCADETApp(param.Parameterized):
     def _on_download_template(self, event):
         """Generate and provide template for download."""
         try:
-            mode = get_operation_mode(self.operation_mode)
             component_names = self._get_component_names()
             
             generator = ExcelTemplateGenerator(
-                operation_mode=mode,
+                operation_mode=self.operation_mode,
                 column_model=self.column_model,
                 binding_model=self.binding_model,
                 n_components=self.n_components,

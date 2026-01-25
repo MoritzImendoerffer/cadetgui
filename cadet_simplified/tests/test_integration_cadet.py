@@ -49,7 +49,7 @@ def create_simple_configs() -> tuple:
     
     Configuration:
     - 2 components: Salt, Protein
-    - LumpedRateModelWithoutPores (simplest model)
+    - LumpedRateModelWithoutPores
     - 1 cm column, 1 cm diameter
     - StericMassAction binding
     - Quick gradient elution
@@ -218,7 +218,7 @@ def create_simple_lwe_process() -> Any:
     process.cycle_time = cycle_time
 
     # Define concentrations for each phase
-    c_load = [50.0, 1.0]      # Salt 50 mM, Protein 1 mM (≈ 1 g/L for ~50 kDa protein)
+    c_load = [50.0, 1.0]      # Salt 50 mM, Protein 1 mM (= 1 Mol/m3)
     c_wash = [50.0, 0.0]      # Salt 50 mM, no protein
     c_elute_start = [50.0, 0.0]
     c_elute_end = [500.0, 0.0]
