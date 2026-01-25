@@ -7,7 +7,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Callable, TYPE_CHECKING
 import traceback
-
+from cadet_simplified.utils import path_utils
 import numpy as np
 
 if TYPE_CHECKING:
@@ -135,7 +135,7 @@ class SimulationRunner:
     def run(
         self,
         process: "Process",
-        h5_path: Path | str | None = None,
+        h5_dir: Path | str | None = None,
     ) -> SimulationResultWrapper:
         """Run a simulation.
         
@@ -143,7 +143,7 @@ class SimulationRunner:
         ----------
         process : Process
             CADET-Process Process object
-        h5_path : Path or str, optional
+        h5_dir : Path or str, optional
             If provided, the H5 file (containing config + results) is preserved
             at this path. Otherwise, a temp file is created and deleted.
             
@@ -157,10 +157,14 @@ class SimulationRunner:
         errors = []
         warnings = []
         
-        # Convert to Path if string
-        if h5_path is not None:
-            h5_path = Path(h5_path)
+        if h5_dir is None:
+            h5_dir = path_utils.get_experiment_path()
+        else:
+            if isinstance(h5_dir, str):
+                h5_dir = Path(h5_dir)
         
+        h5_path = h5_dir.joinpath(f"{process.name}.h5")
+
         start_time = time.time()
         
         try:
@@ -243,21 +247,18 @@ class SimulationRunner:
         """
         total = len(processes)
         
-        # Convert to Path and ensure directory exists
-        if h5_dir is not None:
-            h5_dir = Path(h5_dir)
-            h5_dir.mkdir(parents=True, exist_ok=True)
-        
-        def get_h5_path(process: "Process") -> Path | None:
-            if h5_dir is None:
-                return None
-            return h5_dir / f"{process.name}.h5"
-        
+        if h5_dir is None:
+            h5_dir = path_utils.get_experiment_path()
+        else:
+            if isinstance(h5_dir, str):
+                h5_dir = Path(h5_dir)
+            
+            
         # Sequential execution
         if n_cores == 1:
             sequential_results: list[SimulationResultWrapper] = []
             for i, process in enumerate(processes):
-                h5_path = get_h5_path(process)
+                h5_path = h5_dir.joinpath(f"{process.name}.h5")
                 result = self.run(process, h5_path=h5_path)
                 sequential_results.append(result)
                 

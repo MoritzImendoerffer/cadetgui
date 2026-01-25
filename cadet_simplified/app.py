@@ -453,7 +453,10 @@ class SimplifiedCADETApp(param.Parameterized):
         ]
     
     def _on_simulate(self, event):
-        """Run simulations."""
+        """Run simulations.
+        Currently uses the user homes directory
+        TODO: add an option to define the save path
+        """
         if self._current_parse_result is None:
             return
         
@@ -480,7 +483,7 @@ class SimplifiedCADETApp(param.Parameterized):
                 process = mode.create_process(exp, result.column_binding)
                 
                 # Run simulation
-                sim_result = self.runner.run(process, exp.name)
+                sim_result = self.runner.run(process)
                 self._simulation_results.append(sim_result)
                 
                 if sim_result.success:
