@@ -17,7 +17,8 @@ col = "LumpedRateModelWithoutPores"
 
 n_components = 3
 temp_gen = ExcelTemplateGenerator(column_model=col, binding_model=bim, operation_mode=opm, n_components=n_components)
-save_path = Path("~").joinpath("test.xlsx").expanduser()
+save_path = Path("~").expanduser()
+excel_file = save_path.joinpath("test.xlsx")
 temp_gen.save(save_path)
 
 load_path = Path("~").joinpath("test123_filled.xlsx").expanduser()
@@ -38,7 +39,7 @@ for exp in result.experiments:
 runner = SimulationRunner()
 result = runner.run(process_list[0])
 
-results = runner.run_batch(process_list, n_cores=1)
+results = runner.run_batch(process_list, n_cores=3)
 
 
 print("Done")
