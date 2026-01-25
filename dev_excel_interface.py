@@ -48,7 +48,12 @@ runner = SimulationRunner()
 
 # Option A: Full storage (pickle + parquet chromatograms + H5)
 storage = FileResultsStorage(save_path.joinpath("cadet_output"))
-results = runner.run_batch(process_list, n_cores=3)
+
+# Run simulations with H5 files in the pending directory
+# This keeps temporary files separate from finalized experiment sets
+results = runner.run_batch(process_list, h5_dir=storage.get_pending_dir(), n_cores=3)
+
+# Save experiment set - this moves H5 files from _pending to the final location
 set_id = storage.save_experiment_set(
     name="my_study",
     operation_mode=opm,
@@ -63,12 +68,15 @@ print(f"Saved to storage with ID: {set_id}")
 
 
 # Option B: Just Excel export (no pickle/storage)
-exporter = ResultsExporter(n_interpolation_points=500)
-results = runner.run_batch(process_list, n_cores=3)
-excel_path = exporter.export_simulation_results(
-    results=results,
-    experiment_configs=result.experiments,
-    column_binding=result.column_binding,
-    output_path=save_path.joinpath("cadet_output", "my_study_results.xlsx"),
-)
-print(f"Excel exported to: {excel_path}")
+# Note: For standalone exports without storage, use a temp directory for H5 files
+import tempfile
+with tempfile.TemporaryDirectory() as tmpdir:
+    exporter = ResultsExporter(n_interpolation_points=500)
+    results = runner.run_batch(process_list, h5_dir=tmpdir, n_cores=3)
+    excel_path = exporter.export_simulation_results(
+        results=results,
+        experiment_configs=result.experiments,
+        column_binding=result.column_binding,
+        output_path=save_path.joinpath("cadet_output", "my_study_results.xlsx"),
+    )
+    print(f"Excel exported to: {excel_path}")

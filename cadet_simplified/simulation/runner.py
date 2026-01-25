@@ -158,7 +158,7 @@ class SimulationRunner:
         warnings = []
         
         if h5_dir is None:
-            h5_dir = path_utils.get_experiment_path()
+            h5_dir = path_utils.get_storage_path() / "_pending"
         else:
             if isinstance(h5_dir, str):
                 h5_dir = Path(h5_dir)
@@ -248,7 +248,7 @@ class SimulationRunner:
         total = len(processes)
         
         if h5_dir is None:
-            h5_dir = path_utils.get_experiment_path()
+            h5_dir = path_utils.get_storage_path() / "_pending"
         else:
             if isinstance(h5_dir, str):
                 h5_dir = Path(h5_dir)
@@ -258,8 +258,7 @@ class SimulationRunner:
         if n_cores == 1:
             sequential_results: list[SimulationResultWrapper] = []
             for i, process in enumerate(processes):
-                h5_path = h5_dir.joinpath(f"{process.name}.h5")
-                result = self.run(process, h5_path=h5_path)
+                result = self.run(process, h5_dir)
                 sequential_results.append(result)
                 
                 if progress_callback:

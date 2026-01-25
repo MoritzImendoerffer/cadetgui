@@ -44,6 +44,7 @@ pytestmark = pytest.mark.skipif(
     reason="CADET or CADET-Process not installed"
 )
 
+
 def create_simple_configs() -> tuple:
     """Create simple ExperimentConfig and ColumnBindingConfig for testing.
     
@@ -138,20 +139,21 @@ def create_simple_process() -> Any:
     
     return process
 
+
 def create_simple_lwe_process() -> Any:
-    """Create a simple Load-Wash-Elute process for testing.
+    """Create a simple Load-Wash-Elute process for testing (manual construction).
 
     Configuration:
     - 2 components: Salt, Protein
     - LumpedRateModelWithoutPores (simplest model)
     - 1 cm column, 1 cm diameter
-    - Langmuir binding (simple)
+    - StericMassAction binding
     - Quick gradient elution
     """
     # Component system
     component_system = ComponentSystem(['Salt', 'Protein'])
 
-    # Binding model - Langmuir
+    # Binding model - StericMassAction
     binding_model = StericMassAction(component_system, name='SMA')
     binding_model.is_kinetic = False
     binding_model.adsorption_rate = [0.0, 0.1]      # Salt doesn't bind
@@ -193,11 +195,7 @@ def create_simple_lwe_process() -> Any:
     # Process with simple gradient
     process = Process(flow_sheet, 'simple_lwe_test')
 
-    # Total cycle: 600 seconds (10 min)
-    # - Load: 0-120s (2 min) - protein at 1 g/L, salt at 50 mM
-    # - Wash: 120-240s (2 min) - salt at 50 mM
-    # - Elute: 240-480s (4 min) - gradient 50 -> 500 mM
-    # - Strip: 480-600s (2 min) - salt at 500 mM
+    # Total cycle
     equilibration_duration = 1
     load_duration = 1
     wash_duration = 1
@@ -222,14 +220,13 @@ def create_simple_lwe_process() -> Any:
     c_wash = [50.0, 0.0]      # Salt 50 mM, no protein
     c_elute_start = [50.0, 0.0]
     c_elute_end = [500.0, 0.0]
-    #c_strip = [500.0, 0.0]
 
     # Gradient slope for elution
     elution_duration = 5
     gradient_slope = [(c_elute_end[0] - c_elute_start[0]) / elution_duration,
                         (c_elute_end[1] - c_elute_start[1]) / elution_duration]
 
-    # Polynomial coefficients for gradient: [const, linear, quad, cubic]
+    # Polynomial coefficients for gradient
     c_gradient_poly = [
         [c_elute_start[0], gradient_slope[0], 0.0, 0.0],
         [c_elute_start[1], gradient_slope[1], 0.0, 0.0],
@@ -269,174 +266,284 @@ class TestIntegrationSimulation:
         runner = SimulationRunner()
         
         with tempfile.TemporaryDirectory() as tmpdir:
-            h5_path = Path(tmpdir) / "test_result.h5"
+            h5_dir = Path(tmpdir)
             
-            result = runner.run(process, h5_path=h5_path)
+            result = runner.run(process, h5_dir=h5_dir)
             
             assert result.success
-            assert h5_path.exists(), "H5 file was not created"
-            assert h5_path.stat().st_size > 0, "H5 file is empty"
+            assert result.h5_path is not None
+            assert result.h5_path.exists(), "H5 file was not created"
+            assert result.h5_path.stat().st_size > 0, "H5 file is empty"
+
+
+class TestIntegrationExporter:
+    """Integration tests for ResultsExporter with real simulations."""
     
-    def test_analyzer_full_export(self):
+    def test_exporter_full_export(self):
         """Test full export workflow with real simulation."""
         from cadet_simplified.simulation import SimulationRunner
-        from cadet_simplified.results import ResultsAnalyzer
-        from cadet_simplified.operation_modes import ExperimentConfig, ColumnBindingConfig, ComponentDefinition
+        from cadet_simplified.results import ResultsExporter
         
-        process = create_simple_lwe_process()
+        experiment_config, column_binding = create_simple_configs()
+        process = create_simple_process()
         runner = SimulationRunner()
         result = runner.run(process)
         
         assert result.success, f"Simulation failed: {result.errors}"
         
-        # Create mock configs
-        experiment_config = ExperimentConfig(
-            name="simple_lwe_test",
-            parameters={
-                "flow_rate_mL_min": 0.1,
-                "load_cv": 2.0,
-                "wash_cv": 2.0,
-                "elution_cv": 4.0,
-                "load_salt_mM": 50.0,
-                "gradient_end_mM": 500.0,
-            },
-            components=[
-                ComponentDefinition(name="Salt", is_salt=True),
-                ComponentDefinition(name="Protein", is_salt=False),
-            ],
-        )
-        
-        column_binding = ColumnBindingConfig(
-            column_model="LumpedRateModelWithoutPores",
-            binding_model="Langmuir",
-            column_parameters={
-                "length": 0.01,
-                "diameter": 0.01,
-                "total_porosity": 0.7,
-                "axial_dispersion": 1e-7,
-            },
-            binding_parameters={
-                "is_kinetic": False,
-            },
-            component_column_parameters={},
-            component_binding_parameters={
-                "adsorption_rate": [0.0, 0.1],
-                "desorption_rate": [0.0, 0.01],
-                "capacity": [0.0, 100.0],
-            },
-        )
-        
         with tempfile.TemporaryDirectory() as tmpdir:
-            analyzer = ResultsAnalyzer(
-                base_dir=tmpdir,
-                simulator=runner.simulator,
-                n_interpolation_points=250,
-            )
+            exporter = ResultsExporter(n_interpolation_points=250)
+            excel_path = Path(tmpdir) / "results.xlsx"
             
-            output_path = analyzer.export(
+            output_path = exporter.export_simulation_results(
                 results=[result],
                 experiment_configs=[experiment_config],
                 column_binding=column_binding,
-                name="integration_test",
+                output_path=excel_path,
             )
             
-            # Check output folder exists
+            # Check Excel file exists
             assert output_path.exists()
-            assert output_path.is_dir()
-            
-            # Check Excel file
-            excel_path = output_path / "results.xlsx"
-            assert excel_path.exists()
             
             # Verify Excel content
-            xl = pd.ExcelFile(excel_path)
+            xl = pd.ExcelFile(output_path)
             assert "Parameters" in xl.sheet_names
             assert "simple_lwe_test" in xl.sheet_names
             
             # Check parameters sheet
-            params_df = pd.read_excel(excel_path, sheet_name="Parameters")
+            params_df = pd.read_excel(output_path, sheet_name="Parameters")
             assert len(params_df) == 1
             assert params_df.iloc[0]["experiment_name"] == "simple_lwe_test"
             assert params_df.iloc[0]["simulation_success"] == True
             
-            # Check chromatogram sheet
-            chrom_df = pd.read_excel(excel_path, sheet_name="simple_lwe_test")
+            # Check chromatogram sheet - new column naming
+            chrom_df = pd.read_excel(output_path, sheet_name="simple_lwe_test")
             assert len(chrom_df) == 250  # n_interpolation_points
-            assert "time_s" in chrom_df.columns
-            assert "c_Salt_mM" in chrom_df.columns
-            assert "c_Protein_mM" in chrom_df.columns
-            
-            # Check H5 config file
-            h5_files = list(output_path.glob("*.h5"))
-            assert len(h5_files) == 1
-            assert h5_files[0].name == "simple_lwe_test_config.h5"
+            assert "time" in chrom_df.columns
+            assert "Salt" in chrom_df.columns
+            assert "Protein" in chrom_df.columns
+
+
+class TestIntegrationStorage:
+    """Integration tests for FileResultsStorage with real simulations."""
     
-    def test_analyzer_export_with_full_h5(self):
-        """Test export when full H5 (with results) is preserved."""
+    def test_storage_round_trip(self):
+        """Test save and load workflow with real simulation."""
         from cadet_simplified.simulation import SimulationRunner
-        from cadet_simplified.results import ResultsAnalyzer
-        from cadet_simplified.operation_modes import ExperimentConfig, ColumnBindingConfig, ComponentDefinition
+        from cadet_simplified.storage import FileResultsStorage
         
-        process = create_simple_lwe_process()
+        experiment_config, column_binding = create_simple_configs()
+        process = create_simple_process()
+        runner = SimulationRunner()
+        result = runner.run(process)
+        
+        assert result.success, f"Simulation failed: {result.errors}"
+        
+        with tempfile.TemporaryDirectory() as tmpdir:
+            storage = FileResultsStorage(tmpdir, n_interpolation_points=100)
+            
+            # Save
+            set_id = storage.save_experiment_set(
+                name="integration_test",
+                operation_mode="LWE_concentration_based",
+                experiments=[experiment_config],
+                column_binding=column_binding,
+                results=[result],
+            )
+            
+            assert set_id is not None
+            
+            # List
+            df = storage.list_experiments()
+            assert len(df) == 1
+            assert df.iloc[0]["experiment_name"] == "simple_lwe_test"
+            assert df.iloc[0]["has_results"] == True
+            assert df.iloc[0]["has_chromatogram"] == True
+            
+            # Load
+            loaded = storage.load_results(set_id)
+            assert len(loaded) == 1
+            
+            loaded_exp = loaded[0]
+            assert loaded_exp.experiment_name == "simple_lwe_test"
+            assert loaded_exp.result.success is True
+            assert loaded_exp.chromatogram_df is not None
+            assert len(loaded_exp.chromatogram_df) == 100
+            
+            # Verify chromatogram has data
+            assert "time" in loaded_exp.chromatogram_df.columns
+            assert "Salt" in loaded_exp.chromatogram_df.columns
+            assert "Protein" in loaded_exp.chromatogram_df.columns
+    
+    def test_storage_with_h5_files(self):
+        """Test that H5 files are stored correctly."""
+        from cadet_simplified.simulation import SimulationRunner
+        from cadet_simplified.storage import FileResultsStorage
+        
+        experiment_config, column_binding = create_simple_configs()
+        process = create_simple_process()
         runner = SimulationRunner()
         
         with tempfile.TemporaryDirectory() as tmpdir:
             tmpdir = Path(tmpdir)
+            h5_dir = tmpdir / "h5_temp"
+            h5_dir.mkdir()
             
-            # Run with H5 preservation
-            output_path = tmpdir / "output"
-            output_path.mkdir()
-            
-            h5_path = output_path / f"{process.name}.h5"
-            result = runner.run(process, h5_path=h5_path)
-            
+            # Run with H5 output
+            result = runner.run(process, h5_dir=h5_dir)
             assert result.success
-            assert h5_path.exists()
+            assert result.h5_path is not None
             
-            # Create configs
-            experiment_config = ExperimentConfig(
-                name="simple_lwe_test",
-                parameters={"flow_rate_mL_min": 0.1},
+            # Save to storage
+            storage = FileResultsStorage(tmpdir / "storage")
+            set_id = storage.save_experiment_set(
+                name="h5_test",
+                operation_mode="LWE_concentration_based",
+                experiments=[experiment_config],
+                column_binding=column_binding,
+                results=[result],
+            )
+            
+            # Check H5 was copied
+            h5_stored = tmpdir / "storage" / set_id / "h5" / "simple_lwe_test.h5"
+            assert h5_stored.exists()
+            assert h5_stored.stat().st_size > 0
+    
+    def test_batch_simulation_and_storage(self):
+        """Test batch simulation followed by storage."""
+        from cadet_simplified.simulation import SimulationRunner
+        from cadet_simplified.storage import FileResultsStorage
+        from cadet_simplified.operation_modes import (
+            ExperimentConfig,
+            ColumnBindingConfig,
+            ComponentDefinition,
+            get_operation_mode,
+        )
+        
+        # Create multiple experiment configs with different parameters
+        configs = []
+        for i in range(3):
+            config = ExperimentConfig(
+                name=f"batch_exp_{i}",
+                parameters={
+                    "flow_rate_mL_min": 0.1,
+                    "equilibration_cv": 1.0,
+                    "load_cv": 1.0,
+                    "wash_cv": 1.0,
+                    "elution_cv": 3.0 + i,  # Vary elution volume
+                    "strip_cv": 0.0,
+                    "load_salt_mM": 50.0,
+                    "wash_salt_mM": 50.0,
+                    "gradient_start_mM": 50.0,
+                    "gradient_end_mM": 500.0,
+                    "strip_salt_mM": 500.0,
+                    "ph": 7.0,
+                    "component_2_load_concentration": 1.0,
+                },
                 components=[
                     ComponentDefinition(name="Salt", is_salt=True),
                     ComponentDefinition(name="Protein", is_salt=False),
                 ],
             )
+            configs.append(config)
+        
+        _, column_binding = create_simple_configs()
+        
+        # Create processes
+        mode = get_operation_mode("LWE_concentration_based")
+        processes = [mode.create_process(cfg, column_binding) for cfg in configs]
+        
+        with tempfile.TemporaryDirectory() as tmpdir:
+            runner = SimulationRunner()
             
-            column_binding = ColumnBindingConfig(
-                column_model="LumpedRateModelWithoutPores",
-                binding_model="Langmuir",
-                column_parameters={"length": 0.01},
-                binding_parameters={},
-                component_column_parameters={},
-                component_binding_parameters={},
-            )
+            # Run batch (sequential for simplicity in tests)
+            results = runner.run_batch(processes, n_cores=1)
             
-            analyzer = ResultsAnalyzer(
-                base_dir=tmpdir,
-                simulator=runner.simulator,
-            )
+            assert len(results) == 3
+            assert all(r.success for r in results), f"Some simulations failed: {[r.errors for r in results if not r.success]}"
             
-            # Export using existing output_path (where H5 already exists)
-            final_path = analyzer.export(
-                results=[result],
-                experiment_configs=[experiment_config],
+            # Save to storage
+            storage = FileResultsStorage(tmpdir, n_interpolation_points=50)
+            set_id = storage.save_experiment_set(
+                name="batch_test",
+                operation_mode="LWE_concentration_based",
+                experiments=configs,
                 column_binding=column_binding,
-                output_path=output_path,
+                results=results,
             )
             
-            # Should have full H5 (not _config.h5)
-            h5_files = list(final_path.glob("*.h5"))
-            assert len(h5_files) == 1
-            # The full H5 should be kept, not replaced with config-only
-            assert "simple_lwe_test.h5" in [f.name for f in h5_files]
+            # Load and verify
+            loaded = storage.load_results(set_id)
+            assert len(loaded) == 3
             
+            names = {exp.experiment_name for exp in loaded}
+            assert names == {"batch_exp_0", "batch_exp_1", "batch_exp_2"}
+            
+            # All should have chromatograms
+            for exp in loaded:
+                assert exp.chromatogram_df is not None
+                assert len(exp.chromatogram_df) == 50
+
+
+class TestIntegrationAnalysis:
+    """Integration tests for the analysis module with real data."""
+    
+    def test_simple_analysis_with_real_data(self):
+        """Test SimpleChromatogramAnalysis with real simulation data."""
+        from cadet_simplified.simulation import SimulationRunner
+        from cadet_simplified.storage import FileResultsStorage
+        from cadet_simplified.analysis import AnalysisView, get_analysis
+        
+        experiment_config, column_binding = create_simple_configs()
+        process = create_simple_process()
+        runner = SimulationRunner()
+        result = runner.run(process)
+        
+        assert result.success
+        
+        with tempfile.TemporaryDirectory() as tmpdir:
+            # Save to storage
+            storage = FileResultsStorage(tmpdir, n_interpolation_points=100)
+            set_id = storage.save_experiment_set(
+                name="analysis_test",
+                operation_mode="LWE_concentration_based",
+                experiments=[experiment_config],
+                column_binding=column_binding,
+                results=[result],
+            )
+            
+            # Load
+            loaded = storage.load_results(set_id)
+            
+            # Run analysis
+            view = AnalysisView()
+            analysis = get_analysis("simple")
+            analysis.run(loaded, view)
+            
+            # View should have content
+            assert not view.is_empty
+            assert len(view) > 0
+
+
 if __name__ == "__main__":
     import sys
     from pathlib import Path
     sys.path.append(str(Path(__file__).resolve().parents[2]))
-    process = create_simple_process()
-    create_simple_configs()
+    
+    # Run basic tests
     test = TestIntegrationSimulation()
     test.test_simple_simulation_runs()
-    print("Done")
+    print("test_simple_simulation_runs: PASSED")
+    
+    test.test_simulation_with_h5_output()
+    print("test_simulation_with_h5_output: PASSED")
+    
+    test2 = TestIntegrationExporter()
+    test2.test_exporter_full_export()
+    print("test_exporter_full_export: PASSED")
+    
+    test3 = TestIntegrationStorage()
+    test3.test_storage_round_trip()
+    print("test_storage_round_trip: PASSED")
+    
+    print("\nAll integration tests passed!")

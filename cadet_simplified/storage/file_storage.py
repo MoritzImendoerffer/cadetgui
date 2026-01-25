@@ -12,6 +12,11 @@ Stores experiments in a structured folder hierarchy:
     └── h5/
         ├── {exp_name}.h5        # CADET H5 files
         └── ...
+
+Temporary files during simulation:
+    {storage_dir}/_pending/
+        ├── {exp_name}.h5        # H5 files before experiment set is saved
+        └── ...
 """
 
 import hashlib
@@ -129,7 +134,11 @@ class FileResultsStorage(ResultsStorageInterface):
     Example:
         storage = FileResultsStorage("./experiments")
         
-        # After simulation
+        # Run simulations with H5 files in pending directory
+        runner = SimulationRunner()
+        results = runner.run_batch(processes, h5_dir=storage.get_pending_dir())
+        
+        # After simulation - save moves H5 files to final location
         set_id = storage.save_experiment_set(
             name="IEX Screening",
             operation_mode="LWE_concentration_based",
@@ -145,6 +154,8 @@ class FileResultsStorage(ResultsStorageInterface):
             (set_id, "experiment_2"),
         ])
     """
+    
+    PENDING_DIR_NAME = "_pending"
     
     def __init__(
         self,
@@ -173,6 +184,43 @@ class FileResultsStorage(ResultsStorageInterface):
         timestamp = datetime.now().isoformat()
         id_string = f"{name}_{timestamp}"
         return hashlib.md5(id_string.encode()).hexdigest()[:12]
+    
+    def get_pending_dir(self) -> Path:
+        """Get the directory for temporary H5 files during simulation.
+        
+        Use this as the h5_dir parameter for SimulationRunner.run() or run_batch().
+        Files in this directory are moved to the final location when
+        save_experiment_set() is called.
+        
+        Returns
+        -------
+        Path
+            Path to the _pending directory
+        """
+        pending_dir = self.storage_dir / self.PENDING_DIR_NAME
+        pending_dir.mkdir(parents=True, exist_ok=True)
+        return pending_dir
+    
+    def clear_pending(self) -> int:
+        """Clear all files in the pending directory.
+        
+        Use this to clean up orphaned H5 files if a simulation was interrupted.
+        
+        Returns
+        -------
+        int
+            Number of files deleted
+        """
+        pending_dir = self.storage_dir / self.PENDING_DIR_NAME
+        if not pending_dir.exists():
+            return 0
+        
+        count = 0
+        for f in pending_dir.iterdir():
+            if f.is_file():
+                f.unlink()
+                count += 1
+        return count
     
     def _interpolate_chromatogram(
         self,
@@ -265,6 +313,9 @@ class FileResultsStorage(ResultsStorageInterface):
         with open(config_path, 'w') as f:
             json.dump(config_data, f, indent=2)
         
+        # Track H5 files that were successfully copied (for cleanup)
+        h5_sources_to_cleanup: list[Path] = []
+        
         # Save results for each experiment
         for exp, result in zip(experiments, results):
             if not result.success:
@@ -288,6 +339,15 @@ class FileResultsStorage(ResultsStorageInterface):
                 h5_dest = set_dir / "h5" / f"{safe_name}.h5"
                 if result.h5_path != h5_dest:
                     shutil.copy2(result.h5_path, h5_dest)
+                    h5_sources_to_cleanup.append(result.h5_path)
+        
+        # All saves succeeded - clean up source H5 files
+        for h5_source in h5_sources_to_cleanup:
+            try:
+                if h5_source.exists():
+                    h5_source.unlink()
+            except Exception as e:
+                print(f"Warning: Could not delete source H5 file {h5_source}: {e}")
         
         return set_id
     
@@ -419,7 +479,10 @@ class FileResultsStorage(ResultsStorageInterface):
         if experiment_set_id is not None:
             set_dirs = [self._get_set_dir(experiment_set_id)]
         else:
-            set_dirs = [d for d in self.storage_dir.iterdir() if d.is_dir()]
+            set_dirs = [
+                d for d in self.storage_dir.iterdir() 
+                if d.is_dir() and d.name != self.PENDING_DIR_NAME
+            ]
         
         for set_dir in set_dirs:
             config_path = set_dir / "config.json"
@@ -490,6 +553,8 @@ class FileResultsStorage(ResultsStorageInterface):
         for set_dir in self.storage_dir.iterdir():
             if not set_dir.is_dir():
                 continue
+            if set_dir.name == self.PENDING_DIR_NAME:
+                continue
             
             config_path = set_dir / "config.json"
             if not config_path.exists():
@@ -537,3 +602,4 @@ class FileResultsStorage(ResultsStorageInterface):
         if chrom_path.exists():
             return pd.read_parquet(chrom_path)
         return None
+    

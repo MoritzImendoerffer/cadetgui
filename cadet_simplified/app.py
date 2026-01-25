@@ -494,6 +494,9 @@ class SimplifiedCADETApp(param.Parameterized):
         n_experiments = len(result.experiments)
         output_items = [pn.pane.Markdown("### Simulation Progress\n")]
         
+        # Use storage's pending directory for H5 files
+        h5_dir = self.storage.get_pending_dir()
+        
         for i, exp in enumerate(result.experiments):
             progress = int((i / n_experiments) * 100)
             self._simulation_progress.value = progress
@@ -502,7 +505,7 @@ class SimplifiedCADETApp(param.Parameterized):
             
             try:
                 process = mode.create_process(exp, result.column_binding)
-                sim_result = self.runner.run(process)
+                sim_result = self.runner.run(process, h5_dir=h5_dir)
                 self._simulation_results.append(sim_result)
                 
                 if sim_result.success:
