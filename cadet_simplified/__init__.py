@@ -13,27 +13,27 @@ Example workflow:
     8. Analyze selected experiments
 
 Quick start:
-    >>> from cadet_simplified import get_lwe_mode, generate_template
-    >>> mode = get_lwe_mode()
-    >>> generate_template(
-    ...     operation_mode=mode,
-    ...     column_model="GeneralRateModel",
-    ...     binding_model="StericMassAction",
-    ...     n_components=4,
-    ...     component_names=["Salt", "Product", "Impurity1", "Impurity2"],
-    ...     output_path="template.xlsx",
-    ... )
+    from cadet_simplified import get_lwe_mode, generate_template
+    mode = get_lwe_mode()
+    generate_template(
+        operation_mode=mode,
+        column_model="GeneralRateModel",
+        binding_model="StericMassAction",
+        n_components=4,
+        component_names=["Salt", "Product", "Impurity1", "Impurity2"],
+        output_path="template.xlsx",
+    )
 
 Storage and analysis:
-    >>> from cadet_simplified.storage import FileResultsStorage
-    >>> from cadet_simplified.analysis import AnalysisView, get_analysis
-    >>> 
-    >>> storage = FileResultsStorage("./experiments")
-    >>> loaded = storage.load_results_by_selection([...], n_workers=4)
-    >>> 
-    >>> view = AnalysisView()
-    >>> analysis = get_analysis("simple")
-    >>> analysis.run(loaded, view)
+    from cadet_simplified.storage import FileResultsStorage
+    from cadet_simplified.analysis import AnalysisView, get_analysis
+    
+    storage = FileResultsStorage("./experiments")
+    loaded = storage.load_results_by_selection([...], n_workers=4)
+    
+    view = AnalysisView()
+    analysis = get_analysis("simple")
+    analysis.run(loaded, view)
 """
 
 from .operation_modes import (

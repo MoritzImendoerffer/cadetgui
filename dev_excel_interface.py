@@ -46,9 +46,7 @@ for exp in result.experiments:
 
 runner = SimulationRunner()
 
-# === NEW API ===
-
-# Option A: Full storage (pickle + parquet chromatograms + H5) - RECOMMENDED
+# Option A: Full storage (pickle + parquet chromatograms + H5)
 storage = FileResultsStorage(save_path.joinpath("cadet_output"))
 results = runner.run_batch(process_list, n_cores=3)
 set_id = storage.save_experiment_set(

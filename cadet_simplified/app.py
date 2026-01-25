@@ -31,7 +31,7 @@ from .excel import ExcelTemplateGenerator, ExcelParser, ParseResult
 from .storage import FileResultsStorage, LoadedExperiment
 from .simulation import SimulationRunner, ValidationResult
 from .analysis import AnalysisView, get_analysis, list_analyses
-
+from .utils.path_utils import get_storage_path
 if TYPE_CHECKING:
     from .operation_modes import ExperimentConfig, ColumnBindingConfig
 
@@ -75,13 +75,14 @@ class SimplifiedCADETApp(param.Parameterized):
     
     def __init__(
         self,
-        storage_dir: str | Path = "./experiments",
+        storage_dir: str | Path = None,
         cadet_path: str | None = None,
         n_load_workers: int = 4,
         **params
     ):
         super().__init__(**params)
-        
+        if not storage_dir:
+            storage_dir = get_storage_path()
         self.storage_dir = Path(storage_dir)
         self.cadet_path = cadet_path
         self.n_load_workers = n_load_workers

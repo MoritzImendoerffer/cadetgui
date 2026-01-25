@@ -127,23 +127,23 @@ class FileResultsStorage(ResultsStorageInterface):
     """File-based implementation of results storage.
     
     Example:
-        >>> storage = FileResultsStorage("./experiments")
-        >>> 
-        >>> # After simulation
-        >>> set_id = storage.save_experiment_set(
-        ...     name="IEX Screening",
-        ...     operation_mode="LWE_concentration_based",
-        ...     experiments=configs,
-        ...     column_binding=col_bind,
-        ...     results=sim_results,
-        ... )
-        >>> 
-        >>> # Later, for analysis
-        >>> experiments_df = storage.list_experiments(limit=25)
-        >>> loaded = storage.load_results_by_selection([
-        ...     (set_id, "experiment_1"),
-        ...     (set_id, "experiment_2"),
-        ... ])
+        storage = FileResultsStorage("./experiments")
+        
+        # After simulation
+        set_id = storage.save_experiment_set(
+            name="IEX Screening",
+            operation_mode="LWE_concentration_based",
+            experiments=configs,
+            column_binding=col_bind,
+            results=sim_results,
+        )
+        
+        # Later, for analysis
+        experiments_df = storage.list_experiments(limit=25)
+        loaded = storage.load_results_by_selection([
+            (set_id, "experiment_1"),
+            (set_id, "experiment_2"),
+        ])
     """
     
     def __init__(

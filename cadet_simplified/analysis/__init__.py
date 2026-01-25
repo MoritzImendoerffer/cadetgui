@@ -7,20 +7,20 @@ Provides:
 - DetailedAnalysis: Per-experiment plots + parameter comparison
 
 Example:
-    >>> from cadet_simplified.analysis import AnalysisView, get_analysis
-    >>> from cadet_simplified.storage import FileResultsStorage
-    >>> 
-    >>> # Load experiments
-    >>> storage = FileResultsStorage("./experiments")
-    >>> loaded = storage.load_results_by_selection([...], n_workers=4)
-    >>> 
-    >>> # Run analysis
-    >>> view = AnalysisView()
-    >>> analysis = get_analysis("simple")
-    >>> analysis.run(loaded, view)
-    >>> 
-    >>> # Display (in Panel app)
-    >>> layout = view.view()
+    from cadet_simplified.analysis import AnalysisView, get_analysis
+    from cadet_simplified.storage import FileResultsStorage
+    
+    # Load experiments
+    storage = FileResultsStorage("./experiments")
+    loaded = storage.load_results_by_selection([...], n_workers=4)
+    
+    # Run analysis
+    view = AnalysisView()
+    analysis = get_analysis("simple")
+    analysis.run(loaded, view)
+    
+    # Display (in Panel app)
+    layout = view.view()
 """
 
 from .view import AnalysisView

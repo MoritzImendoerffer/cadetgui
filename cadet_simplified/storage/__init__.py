@@ -7,26 +7,26 @@ Two storage backends are available:
    interpolated chromatograms, and H5 files
 
 Example usage with FileResultsStorage:
-    >>> from cadet_simplified.storage import FileResultsStorage
-    >>> storage = FileResultsStorage("./experiments")
-    >>> 
-    >>> # Save after simulation
-    >>> set_id = storage.save_experiment_set(
-    ...     name="IEX Screening",
-    ...     operation_mode="LWE_concentration_based",
-    ...     experiments=configs,
-    ...     column_binding=col_bind,
-    ...     results=sim_results,
-    ... )
-    >>> 
-    >>> # List for UI
-    >>> experiments_df = storage.list_experiments(limit=25)
-    >>> 
-    >>> # Load for analysis
-    >>> loaded = storage.load_results_by_selection([
-    ...     (set_id, "experiment_1"),
-    ...     (set_id, "experiment_2"),
-    ... ], n_workers=4)
+    from cadet_simplified.storage import FileResultsStorage
+    storage = FileResultsStorage("./experiments")
+    
+    # Save after simulation
+    set_id = storage.save_experiment_set(
+        name="IEX Screening",
+        operation_mode="LWE_concentration_based",
+        experiments=configs,
+        column_binding=col_bind,
+        results=sim_results,
+     )
+    
+    # List for UI
+    experiments_df = storage.list_experiments(limit=25)
+    
+    # Load for analysis
+    loaded = storage.load_results_by_selection([
+         (set_id, "experiment_1"),
+         (set_id, "experiment_2"),
+     ], n_workers=4)
 """
 
 from .experiment_store import (

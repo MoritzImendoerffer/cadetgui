@@ -4,18 +4,18 @@ Defines the BaseAnalysis interface and concrete implementations.
 Each analysis type processes loaded experiments and populates an AnalysisView.
 
 Example:
-    >>> from cadet_simplified.analysis import SimpleChromatogramAnalysis, AnalysisView
-    >>> from cadet_simplified.storage import FileResultsStorage
-    >>> 
-    >>> storage = FileResultsStorage("./experiments")
-    >>> loaded = storage.load_results_by_selection([...])
-    >>> 
-    >>> view = AnalysisView()
-    >>> analysis = SimpleChromatogramAnalysis()
-    >>> analysis.run(loaded, view)
-    >>> 
-    >>> # Display in Panel
-    >>> view.view()
+    from cadet_simplified.analysis import SimpleChromatogramAnalysis, AnalysisView
+    from cadet_simplified.storage import FileResultsStorage
+    
+    storage = FileResultsStorage("./experiments")
+    loaded = storage.load_results_by_selection([...])
+    
+    view = AnalysisView()
+    analysis = SimpleChromatogramAnalysis()
+    analysis.run(loaded, view)
+    
+    # Display in Panel
+    view.view()
 """
 
 from abc import ABC, abstractmethod

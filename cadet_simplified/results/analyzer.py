@@ -7,20 +7,20 @@ Provides export functionality for sharing simulation results:
 For persistent storage of results, use FileResultsStorage from the storage module.
 
 Example - Export from storage:
-    >>> from cadet_simplified.storage import FileResultsStorage
-    >>> from cadet_simplified.results import ResultsExporter
-    >>> 
-    >>> storage = FileResultsStorage("./experiments")
-    >>> loaded = storage.load_results_by_selection([...])
-    >>> 
-    >>> exporter = ResultsExporter()
-    >>> excel_path = exporter.export_to_excel(loaded, "./exports/my_analysis.xlsx")
+    from cadet_simplified.storage import FileResultsStorage
+    from cadet_simplified.results import ResultsExporter
+    
+    storage = FileResultsStorage("./experiments")
+    loaded = storage.load_results_by_selection([...])
+    
+    exporter = ResultsExporter()
+    excel_path = exporter.export_to_excel(loaded, "./exports/my_analysis.xlsx")
 
 Example - Export after simulation:
-    >>> from cadet_simplified.results import ResultsExporter
-    >>> 
-    >>> exporter = ResultsExporter()
-    >>> excel_path = exporter.export_simulation_results(
+    from cadet_simplified.results import ResultsExporter
+    
+    exporter = ResultsExporter()
+    excel_path = exporter.export_simulation_results(
     ...     results=sim_results,
     ...     experiment_configs=configs,
     ...     column_binding=col_bind,
