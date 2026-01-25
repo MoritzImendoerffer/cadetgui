@@ -4,12 +4,17 @@ Handles running simulations and collecting results.
 """
 
 from dataclasses import dataclass, field
-from typing import Any, Callable
+from pathlib import Path
+from typing import Any, Callable, TYPE_CHECKING
 import traceback
 
 import numpy as np
-from CADETProcess.simulationResults import SimulationResults
-from CADETProcess.processModel.process import Process
+
+if TYPE_CHECKING:
+    from CADETProcess.simulationResults import SimulationResults
+    from CADETProcess.processModel.process import Process
+
+
 @dataclass
 class SimulationResultWrapper:
     """Result of a single simulation."""
@@ -20,7 +25,8 @@ class SimulationResultWrapper:
     errors: list[str] = field(default_factory=list)
     warnings: list[str] = field(default_factory=list)
     runtime_seconds: float = 0.0
-    cadet_result: SimulationResults = None
+    cadet_result: "SimulationResults | None" = None
+    h5_path: Path | None = None  # Path to H5 file if saved
 
 
 @dataclass
@@ -126,15 +132,20 @@ class SimulationRunner:
             warnings=warnings,
         )
     
-    def run(self, process) -> SimulationResultWrapper:
+    def run(
+        self,
+        process: "Process",
+        h5_path: Path | str | None = None,
+    ) -> SimulationResultWrapper:
         """Run a simulation.
         
         Parameters
         ----------
         process : Process
             CADET-Process Process object
-        experiment_name : str
-            Name of the experiment
+        h5_path : Path or str, optional
+            If provided, the H5 file (containing config + results) is preserved
+            at this path. Otherwise, a temp file is created and deleted.
             
         Returns
         -------
@@ -146,11 +157,16 @@ class SimulationRunner:
         errors = []
         warnings = []
         
+        # Convert to Path if string
+        if h5_path is not None:
+            h5_path = Path(h5_path)
+        
         start_time = time.time()
         
         try:
-            # Run simulation
-            result = self.simulator.simulate(process)
+            # Run simulation with optional file path preservation
+            # Using _run directly to control file_path parameter
+            result = self.simulator._run(process, file_path=h5_path)
             
             runtime = time.time() - start_time
             
@@ -172,7 +188,8 @@ class SimulationRunner:
                 solution=solution,
                 warnings=warnings,
                 runtime_seconds=runtime,
-                cadet_result=result
+                cadet_result=result,
+                h5_path=h5_path,
             )
             
         except Exception as e:
@@ -186,11 +203,13 @@ class SimulationRunner:
                 success=False,
                 errors=errors,
                 runtime_seconds=runtime,
+                h5_path=h5_path,
             )
     
     def run_batch(
         self,
-        processes: list[Process],
+        processes: list["Process"],
+        h5_dir: Path | str | None = None,
         stop_on_error: bool = False,
         n_cores: int = 1,
         timeout_per_sim: float | None = None,
@@ -202,6 +221,9 @@ class SimulationRunner:
         ----------
         processes : list[Process]
             List of process instances to simulate
+        h5_dir : Path or str, optional
+            If provided, H5 files are saved to this directory with names
+            based on process names: {h5_dir}/{process.name}.h5
         stop_on_error : bool, default=False
             If True, stop after first error
         n_cores : int, default=1
@@ -213,6 +235,7 @@ class SimulationRunner:
             Callback with signature: 
             callback(current: int, total: int, result: SimulationResultWrapper)
             Called after each simulation completes.
+            
         Returns
         -------
         list[SimulationResultWrapper]
@@ -220,11 +243,22 @@ class SimulationRunner:
         """
         total = len(processes)
         
+        # Convert to Path and ensure directory exists
+        if h5_dir is not None:
+            h5_dir = Path(h5_dir)
+            h5_dir.mkdir(parents=True, exist_ok=True)
+        
+        def get_h5_path(process: "Process") -> Path | None:
+            if h5_dir is None:
+                return None
+            return h5_dir / f"{process.name}.h5"
+        
         # Sequential execution
         if n_cores == 1:
             sequential_results: list[SimulationResultWrapper] = []
             for i, process in enumerate(processes):
-                result = self.run(process)
+                h5_path = get_h5_path(process)
+                result = self.run(process, h5_path=h5_path)
                 sequential_results.append(result)
                 
                 if progress_callback:
@@ -254,7 +288,7 @@ class SimulationRunner:
         try:
             # Submit all tasks and track their indices
             future_to_idx = {
-                executor.submit(self.run, process): idx 
+                executor.submit(self.run, process, get_h5_path(process)): idx 
                 for idx, process in enumerate(processes)
             }
             

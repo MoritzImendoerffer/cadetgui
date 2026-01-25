@@ -62,6 +62,11 @@ from .simulation import (
     validate_and_report,
 )
 
+from .results import (
+    ResultsAnalyzer,
+    InterpolatedChromatogram,
+)
+
 __version__ = "0.1.0"
 
 __all__ = [
@@ -84,6 +89,9 @@ __all__ = [
     'ExcelParser',
     'ParseResult',
     'parse_excel',
+    # Analysis and Storage
+    'ResultsAnalyzer',
+    'InterpolatedChromatogram',
     # Storage
     'ExperimentStore',
     'ExperimentSet',
