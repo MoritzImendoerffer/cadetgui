@@ -36,6 +36,73 @@ if TYPE_CHECKING:
     from .operation_modes import ExperimentConfig, ColumnBindingConfig
 
 
+def _detect_cadet_path() -> tuple[str | None, str]:
+    """Try to detect CADET installation path.
+    
+    Detection order:
+    1. CADET-Process auto-detection
+    2. CADET_PATH environment variable
+    3. None (with error message)
+    
+    Returns
+    -------
+    tuple[str | None, str]
+        (detected_path, status_message)
+        - detected_path: Path string if found, None if not
+        - status_message: Description of detection result
+    """
+    # 1. Try CADET-Process auto-detection
+    try:
+        from CADETProcess.simulator import Cadet
+        simulator = Cadet()
+        simulator.check_cadet()
+        
+        if simulator.cadet_path:
+            cadet_path = Path(simulator.cadet_path)
+            if cadet_path.is_file():
+                path = str(cadet_path.parent)
+            elif cadet_path.is_dir():
+                path = str(cadet_path)
+            else:
+                path = str(simulator.cadet_path)
+            return path, "Auto-detected via CADET-Process"
+    except Exception:
+        pass
+    
+    # 2. Try environment variable
+    env_path = os.environ.get("CADET_PATH")
+    if env_path:
+        if Path(env_path).exists():
+            return env_path, "Loaded from CADET_PATH environment variable"
+        else:
+            # Environment variable set but path doesn't exist
+            return None, f"CADET_PATH environment variable set to '{env_path}' but path does not exist"
+    
+    # 3. Detection failed
+    return None, "CADET path not found"
+
+
+CADET_PATH_HELP = """
+### CADET Path Not Found
+
+CADET could not be auto-detected. Please either:
+
+**Option 1: Set environment variable (recommended)**
+```bash
+# Linux/Mac - add to ~/.bashrc or ~/.zshrc
+export CADET_PATH="/path/to/cadet/bin"
+
+# Windows - in Command Prompt
+set CADET_PATH=C:\\path\\to\\cadet\\bin
+```
+
+**Option 2: Enter the path manually below**
+
+The path should point to the directory containing the CADET executable 
+(e.g., `/home/user/miniconda3/envs/cadet/bin` or `C:\\cadet\\bin`).
+"""
+
+
 class SimplifiedCADETApp(param.Parameterized):
     """Simplified CADET simulation application.
     
@@ -177,6 +244,34 @@ class SimplifiedCADETApp(param.Parameterized):
         )
         
         # === Tab 3: Simulate ===
+        # CADET path detection
+        if self.cadet_path:
+            # Path explicitly provided
+            detected_path = self.cadet_path
+            path_status = "Provided via configuration"
+            path_found = True
+        else:
+            # Try auto-detection
+            detected_path, path_status = _detect_cadet_path()
+            path_found = detected_path is not None
+        
+        self._cadet_path_input = pn.widgets.TextInput(
+            name="CADET Path",
+            value=detected_path or "",
+            placeholder="/path/to/cadet/bin",
+            width=500,
+        )
+        
+        self._cadet_path_status = pn.pane.Markdown(
+            f"*{path_status}*" if path_found else "",
+            sizing_mode='stretch_width',
+        )
+        
+        self._cadet_path_help = pn.pane.Markdown(
+            CADET_PATH_HELP if not path_found else "",
+            sizing_mode='stretch_width',
+        )
+        
         self._simulate_btn = pn.widgets.Button(
             name="Run Simulations",
             button_type="success",
@@ -426,6 +521,21 @@ class SimplifiedCADETApp(param.Parameterized):
         if self._current_parse_result is None:
             return
         
+        # Validate CADET path
+        cadet_path = self._cadet_path_input.value.strip()
+        if not cadet_path:
+            self.status = "Error: CADET path is required for validation. Please enter the path in the Simulate tab."
+            self._update_status("danger")
+            return
+        
+        if not Path(cadet_path).exists():
+            self.status = f"Error: CADET path does not exist: {cadet_path}"
+            self._update_status("danger")
+            return
+        
+        # Update runner with current CADET path
+        self.runner = SimulationRunner(cadet_path)
+        
         result = self._current_parse_result
         mode = get_operation_mode(self.operation_mode)
         
@@ -483,6 +593,21 @@ class SimplifiedCADETApp(param.Parameterized):
         """Run simulations and save results to storage."""
         if self._current_parse_result is None:
             return
+        
+        # Validate CADET path
+        cadet_path = self._cadet_path_input.value.strip()
+        if not cadet_path:
+            self.status = "Error: CADET path is required. Please enter the path to your CADET installation."
+            self._update_status("danger")
+            return
+        
+        if not Path(cadet_path).exists():
+            self.status = f"Error: CADET path does not exist: {cadet_path}"
+            self._update_status("danger")
+            return
+        
+        # Update runner with current CADET path
+        self.runner = SimulationRunner(cadet_path)
         
         result = self._current_parse_result
         mode = get_operation_mode(self.operation_mode)
@@ -555,6 +680,7 @@ class SimplifiedCADETApp(param.Parameterized):
                 )
                 
                 output_items.append(pn.pane.Markdown(f"\n✓ Results saved. Set ID: `{set_id}`"))
+                output_items.append(pn.pane.Markdown(f"✓ Excel export saved: `{set_name}.xlsx`"))
                 output_items.append(pn.pane.Markdown("*Go to the 'Saved' tab to browse and analyze results.*"))
                 self._simulation_output.objects = output_items
                 
@@ -701,6 +827,11 @@ class SimplifiedCADETApp(param.Parameterized):
         # Tab 3: Simulate
         simulate_tab = pn.Column(
             pn.pane.Markdown("## 3. Run Simulations"),
+            pn.pane.Markdown("### CADET Configuration"),
+            self._cadet_path_input,
+            self._cadet_path_status,
+            self._cadet_path_help,
+            pn.layout.Divider(),
             pn.Row(self._simulate_btn),
             self._simulation_progress,
             self._simulation_output,

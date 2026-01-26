@@ -3,16 +3,16 @@ requires = ["setuptools>=61.0"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "cadetgui"
-version = "0.1.0"
-description = "GUI for CADET-Process parameter estimation"
+name = "cadet_simplified"
+version = "0.2.0"
+description = "Simplified Excel-based interface for CADET-Process chromatography simulations"
 readme = "README.md"
 requires-python = ">=3.10"
 license = {text = "MIT"}
 authors = [
     {name = "Moritz Imendoerffer"}
 ]
-keywords = ["chromatography", "parameter estimation", "CADET", "simulation"]
+keywords = ["chromatography", "CADET", "simulation", "ion-exchange", "process modeling"]
 classifiers = [
     "Development Status :: 3 - Alpha",
     "Intended Audience :: Science/Research",
@@ -21,35 +21,63 @@ classifiers = [
     "Programming Language :: Python :: 3.10",
     "Programming Language :: Python :: 3.11",
     "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
     "Topic :: Scientific/Engineering :: Chemistry",
 ]
 
 dependencies = [
+    # CADET bindings
+    "CADET-Process>=0.9",
+    
+    # Data handling
     "pandas>=2.0",
+    "numpy>=1.24",
     "openpyxl>=3.1",
+    "pyarrow>=14.0",
+    
+    # GUI / Visualization
     "panel>=1.0",
     "param>=2.0",
-    "numpy>=1.24",
+    "bokeh>=3.0",
+    "holoviews>=1.18",
+    "hvplot>=0.9",
+    
+    # Utilities
+    "addict>=2.4",
+    "dill>=0.3",
+    
+    # Scientific
+    "scipy>=1.10",
 ]
 
 [project.optional-dependencies]
-cadet = [
-    "cadet-process>=0.9",
-]
 dev = [
     "pytest>=7.0",
     "matplotlib>=3.7",
 ]
+api = [
+    "fastapi>=0.100",
+    "uvicorn>=0.23",
+    "requests>=2.31",
+]
 all = [
-    "cadetgui[cadet,dev]",
+    "cadet_simplified[dev,api]",
 ]
 
 [project.urls]
 Homepage = "https://github.com/MoritzImendoerffer/cadetgui"
+Repository = "https://github.com/MoritzImendoerffer/cadetgui"
+
+[project.scripts]
+# Optional: CLI entry point if you want one
+# cadet-gui = "cadet_simplified.app:serve"
 
 [tool.setuptools.packages.find]
-include = ["cadetgui*"]
+include = ["cadet_simplified*"]
+
+[tool.setuptools.package-data]
+cadet_simplified = ["*.json", "*.xlsx"]
 
 [tool.pytest.ini_options]
-testpaths = ["cadetgui/tests"]
+testpaths = ["cadet_simplified/tests"]
 python_files = ["test_*.py"]
