@@ -1,0 +1,27 @@
+name: cadet
+channels:
+  - conda-forge
+  - defaults
+dependencies:
+  - cadet
+  - pip
+  - fastapi
+  - uvicorn
+  - dill
+  - requests
+  - pytest
+  - cryptography
+  - boto3
+  - botocore
+  - bokeh
+  - holoviews
+  - hvplot
+  - openpyxl
+  - pandas
+  - panel
+  - param
+  - numba
+  - addict
+  - fastparquet
+  - pyarrow
+prefix: /home/moritz/miniconda3/envs/cadet
