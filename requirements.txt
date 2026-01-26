@@ -18,6 +18,7 @@ param>=2.1
 bokeh>=3.4
 holoviews>=1.19
 hvplot>=0.10
+jupyter-server-proxy=4.4.0
 
 # Utilities
 addict==2.3
