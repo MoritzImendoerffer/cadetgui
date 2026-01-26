@@ -41,7 +41,7 @@ dependencies = [
     "bokeh>=3.0",
     "holoviews>=1.18",
     "hvplot>=0.9",
-    "jupyter-server-proxy=4.4.0",
+    "jupyter-server-proxy==4.4.0",
     
     # Utilities
     "addict==2.3",
