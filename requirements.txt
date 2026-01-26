@@ -20,7 +20,7 @@ holoviews>=1.19
 hvplot>=0.10
 
 # Utilities
-addict>=2.4
+addict
 dill>=0.3
 
 # Scientific computing
