@@ -109,9 +109,10 @@ class SimulationRunner:
         """Get or create CADET simulator."""
         if self._simulator is None:
             from CADETProcess.simulator import Cadet
-            self._simulator = Cadet()
             if self.cadet_path:
-                self._simulator.install_path = self.cadet_path
+                self._simulator = Cadet(self.cadet_path)
+            else:
+                self._simulator = Cadet()
         return self._simulator
     
     def validate(self, process, experiment_name: str = "unnamed") -> ValidationResult:
