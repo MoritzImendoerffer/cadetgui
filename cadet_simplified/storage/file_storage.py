@@ -3,6 +3,7 @@
 Stores experiments in a structured folder hierarchy:
     {storage_dir}/{experiment_set_id}/
     ├── config.json              # ExperimentSet metadata + configs
+    ├── {set_name}.xlsx          # Excel export (config + chromatograms)
     ├── chromatograms/
     │   ├── {exp_name}.parquet   # Interpolated chromatogram [time, comp_0, ...]
     │   └── ...
@@ -58,6 +59,15 @@ def _sanitize_filename(name: str) -> str:
     if len(result) > 100:
         result = result[:100]
     return result or "unnamed"
+
+
+def _sanitize_sheet_name(name: str) -> str:
+    """Sanitize string for use as Excel sheet name (max 31 chars)."""
+    invalid_chars = '[]:*?/\\'
+    result = name
+    for char in invalid_chars:
+        result = result.replace(char, '_')
+    return result[:31]
 
 
 def _load_single_result(args: tuple[Path, str, str, dict, dict]) -> LoadedExperiment | None:
@@ -268,6 +278,166 @@ class FileResultsStorage(ResultsStorageInterface):
             print(f"Warning: Failed to interpolate chromatogram: {e}")
             return None
     
+    def _export_experiment_set_excel(
+        self,
+        set_dir: Path,
+        set_name: str,
+        config_data: dict,
+        results: list["SimulationResultWrapper"],
+    ) -> Path | None:
+        """Export experiment set to Excel file.
+        
+        Creates an Excel file with:
+        - Experiments sheet: experiment parameters (same format as input template)
+        - Column_Binding sheet: column and binding parameters
+        - Summary sheet: simulation results (success, runtime, errors)
+        - One sheet per experiment: chromatogram data
+        
+        Parameters
+        ----------
+        set_dir : Path
+            Directory for the experiment set
+        set_name : str
+            Name of the experiment set (used for filename)
+        config_data : dict
+            Configuration data (from config.json structure)
+        results : list[SimulationResultWrapper]
+            Simulation results
+            
+        Returns
+        -------
+        Path or None
+            Path to created Excel file, or None if export failed
+        """
+        try:
+            excel_path = set_dir / f"{_sanitize_filename(set_name)}.xlsx"
+            
+            with pd.ExcelWriter(excel_path, engine='openpyxl') as writer:
+                # Sheet 1: Experiments
+                experiments_df = self._create_experiments_sheet(config_data)
+                experiments_df.to_excel(writer, sheet_name="Experiments", index=False)
+                
+                # Sheet 2: Column_Binding
+                column_binding_df = self._create_column_binding_sheet(config_data)
+                column_binding_df.to_excel(writer, sheet_name="Column_Binding", index=False)
+                
+                # Sheet 3: Summary
+                summary_df = self._create_summary_sheet(config_data, results)
+                summary_df.to_excel(writer, sheet_name="Summary", index=False)
+                
+                # Chromatogram sheets
+                for exp_config, result in zip(config_data["experiments"], results):
+                    if not result.success:
+                        continue
+                    
+                    chrom_df = self._interpolate_chromatogram(result)
+                    if chrom_df is not None:
+                        sheet_name = _sanitize_sheet_name(exp_config["name"])
+                        chrom_df.to_excel(writer, sheet_name=sheet_name, index=False)
+            
+            return excel_path
+            
+        except Exception as e:
+            print(f"Warning: Failed to export Excel: {e}")
+            return None
+    
+    def _create_experiments_sheet(self, config_data: dict) -> pd.DataFrame:
+        """Create Experiments sheet from config data."""
+        experiments = config_data["experiments"]
+        
+        if not experiments:
+            return pd.DataFrame()
+        
+        rows = []
+        for exp in experiments:
+            row = {"experiment_name": exp["name"]}
+            
+            # Add all parameters
+            for key, value in exp.get("parameters", {}).items():
+                row[key] = value
+            
+            # Add component names if present
+            for i, comp in enumerate(exp.get("components", [])):
+                row[f"component_{i+1}_name"] = comp.get("name", f"Component_{i+1}")
+            
+            rows.append(row)
+        
+        return pd.DataFrame(rows)
+    
+    def _create_column_binding_sheet(self, config_data: dict) -> pd.DataFrame:
+        """Create Column_Binding sheet from config data."""
+        col_bind = config_data["column_binding"]
+        
+        rows = []
+        
+        # Model selection
+        rows.append({"parameter": "# MODEL SELECTION", "value": "", "unit": "", "description": ""})
+        rows.append({"parameter": "column_model", "value": col_bind["column_model"], "unit": "-", "description": "Column model type"})
+        rows.append({"parameter": "binding_model", "value": col_bind["binding_model"], "unit": "-", "description": "Binding model type"})
+        
+        # Determine n_components from component parameters
+        n_comp = 0
+        for key, values in col_bind.get("component_binding_parameters", {}).items():
+            if isinstance(values, list):
+                n_comp = max(n_comp, len(values))
+        for key, values in col_bind.get("component_column_parameters", {}).items():
+            if isinstance(values, list):
+                n_comp = max(n_comp, len(values))
+        
+        rows.append({"parameter": "n_components", "value": n_comp, "unit": "-", "description": "Number of components"})
+        
+        # Column parameters (scalar)
+        rows.append({"parameter": "# COLUMN PARAMETERS (SCALAR)", "value": "", "unit": "", "description": ""})
+        for param, value in col_bind.get("column_parameters", {}).items():
+            rows.append({"parameter": param, "value": value, "unit": "-", "description": ""})
+        
+        # Column parameters (per-component)
+        comp_col_params = col_bind.get("component_column_parameters", {})
+        if comp_col_params:
+            rows.append({"parameter": "# COLUMN PARAMETERS (PER-COMPONENT)", "value": "", "unit": "", "description": ""})
+            for param, values in comp_col_params.items():
+                if isinstance(values, list):
+                    for i, val in enumerate(values):
+                        rows.append({"parameter": f"{param}_component_{i+1}", "value": val, "unit": "-", "description": ""})
+        
+        # Binding parameters (scalar)
+        rows.append({"parameter": "# BINDING PARAMETERS (SCALAR)", "value": "", "unit": "", "description": ""})
+        for param, value in col_bind.get("binding_parameters", {}).items():
+            rows.append({"parameter": param, "value": value, "unit": "-", "description": ""})
+        
+        # Binding parameters (per-component)
+        comp_bind_params = col_bind.get("component_binding_parameters", {})
+        if comp_bind_params:
+            rows.append({"parameter": "# BINDING PARAMETERS (PER-COMPONENT)", "value": "", "unit": "", "description": ""})
+            for param, values in comp_bind_params.items():
+                if isinstance(values, list):
+                    for i, val in enumerate(values):
+                        rows.append({"parameter": f"{param}_component_{i+1}", "value": val, "unit": "-", "description": ""})
+        
+        return pd.DataFrame(rows)
+    
+    def _create_summary_sheet(
+        self,
+        config_data: dict,
+        results: list["SimulationResultWrapper"],
+    ) -> pd.DataFrame:
+        """Create Summary sheet with simulation results."""
+        rows = []
+        
+        experiments = config_data["experiments"]
+        
+        for exp, result in zip(experiments, results):
+            row = {
+                "experiment_name": exp["name"],
+                "success": result.success,
+                "runtime_seconds": result.runtime_seconds if result.success else None,
+                "errors": "; ".join(result.errors) if result.errors else "",
+                "warnings": "; ".join(result.warnings) if result.warnings else "",
+            }
+            rows.append(row)
+        
+        return pd.DataFrame(rows)
+    
     def save_experiment_set(
         self,
         name: str,
@@ -348,6 +518,9 @@ class FileResultsStorage(ResultsStorageInterface):
                     h5_source.unlink()
             except Exception as e:
                 print(f"Warning: Could not delete source H5 file {h5_source}: {e}")
+        
+        # Export Excel file
+        self._export_experiment_set_excel(set_dir, name, config_data, results)
         
         return set_id
     
@@ -602,4 +775,3 @@ class FileResultsStorage(ResultsStorageInterface):
         if chrom_path.exists():
             return pd.read_parquet(chrom_path)
         return None
-    

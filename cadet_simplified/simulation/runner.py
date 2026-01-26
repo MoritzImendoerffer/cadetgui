@@ -3,6 +3,7 @@
 Handles running simulations and collecting results.
 """
 
+import os
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Callable, TYPE_CHECKING
@@ -13,6 +14,37 @@ import numpy as np
 if TYPE_CHECKING:
     from CADETProcess.simulationResults import SimulationResults
     from CADETProcess.processModel.process import Process
+
+
+def _resolve_cadet_path(cadet_path: str | None) -> str | None:
+    """Resolve CADET path from argument, environment variable, or auto-detection.
+    
+    Resolution order:
+    1. Explicitly provided path (if not None)
+    2. CADET_PATH environment variable
+    3. CADET-Process auto-detection (returns None, let Cadet() handle it)
+    
+    Parameters
+    ----------
+    cadet_path : str or None
+        Explicitly provided path, or None to use fallbacks
+        
+    Returns
+    -------
+    str or None
+        Resolved path, or None to let CADET-Process auto-detect
+    """
+    # 1. Use explicitly provided path
+    if cadet_path is not None:
+        return cadet_path
+    
+    # 2. Check environment variable
+    env_path = os.environ.get("CADET_PATH")
+    if env_path and Path(env_path).exists():
+        return env_path
+    
+    # 3. Let CADET-Process handle auto-detection
+    return None
 
 
 @dataclass
@@ -41,12 +73,22 @@ class ValidationResult:
 class SimulationRunner:
     """Runs CADET simulations.
     
+    CADET path resolution order:
+    1. Explicitly provided `cadet_path` argument
+    2. `CADET_PATH` environment variable
+    3. CADET-Process auto-detection
+    
     Example:
+        >>> # Auto-detect or use CADET_PATH env var
         >>> runner = SimulationRunner()
+        
+        >>> # Explicit path
+        >>> runner = SimulationRunner(cadet_path="/path/to/cadet/bin")
+        
         >>> # Validate first
         >>> validation = runner.validate(process)
         >>> if validation.valid:
-        ...     result = runner.run(process, "experiment_1")
+        ...     result = runner.run(process)
     """
     
     def __init__(self, cadet_path: str | None = None):
@@ -55,9 +97,11 @@ class SimulationRunner:
         Parameters
         ----------
         cadet_path : str, optional
-            Path to CADET installation. If None, uses default.
+            Path to CADET installation. If None, checks CADET_PATH 
+            environment variable, then falls back to CADET-Process 
+            auto-detection.
         """
-        self.cadet_path = cadet_path
+        self.cadet_path = _resolve_cadet_path(cadet_path)
         self._simulator = None
     
     @property
@@ -67,7 +111,7 @@ class SimulationRunner:
             from CADETProcess.simulator import Cadet
             self._simulator = Cadet()
             if self.cadet_path:
-                self._simulator.cadet_path = self.cadet_path
+                self._simulator.install_path = self.cadet_path
         return self._simulator
     
     def validate(self, process, experiment_name: str = "unnamed") -> ValidationResult:
@@ -288,7 +332,7 @@ class SimulationRunner:
         try:
             # Submit all tasks and track their indices
             future_to_idx = {
-                executor.submit(self.run, process, get_h5_path(process)): idx 
+                executor.submit(self.run, process, h5_dir): idx 
                 for idx, process in enumerate(processes)
             }
             

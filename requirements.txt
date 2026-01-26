@@ -1,0 +1,43 @@
+# Core dependencies for cadet_simplified
+# Generated from conda environment, cleaned for pip compatibility
+
+# CADET Python bindings
+CADET-Process==0.11.1
+CADET-Python==1.1.0
+
+# Data handling
+pandas==2.2.3
+numpy>=2.0
+openpyxl>=3.1
+pyarrow>=17.0
+fastparquet>=2024.0
+
+# GUI / Visualization
+panel>=1.4
+param>=2.1
+bokeh>=3.4
+holoviews>=1.19
+hvplot>=0.10
+
+# Utilities
+addict>=2.4
+dill>=0.3
+
+# Scientific computing
+scipy>=1.13
+numba>=0.59
+
+# Testing (optional, but useful)
+pytest>=8.0
+
+# Web framework (for API if needed)
+fastapi>=0.111
+uvicorn>=0.30
+requests>=2.32
+
+# Other utilities from your environment
+h5py>=3.11
+matplotlib>=3.8
+tqdm>=4.66
+PyYAML>=6.0
+Jinja2>=3.1
