@@ -25,7 +25,7 @@ pip install -e .
 
 # 4. Register as Jupyter kernel
 pip install ipykernel
-python -m ipykernel install --user --name cadet --display-name "Python (CADET)"
+python -m ipykernel install --user --name cadet_simplified --display-name "Python (CADET Simplified)"
 
 # 5. Set CADET path (add to ~/.bashrc for persistence)
 export CADET_PATH="$CONDA_PREFIX/bin"
