@@ -111,7 +111,7 @@ class SimulationRunner:
             from CADETProcess.simulator import Cadet
             self._simulator = Cadet()
             if self.cadet_path:
-                self._simulator.cadet_path = self.cadet_path
+                self._simulator.install_path = self.cadet_path
         return self._simulator
     
     def validate(self, process, experiment_name: str = "unnamed") -> ValidationResult:

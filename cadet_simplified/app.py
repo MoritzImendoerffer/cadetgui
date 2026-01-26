@@ -57,14 +57,14 @@ def _detect_cadet_path() -> tuple[str | None, str]:
         simulator = Cadet()
         simulator.check_cadet()
         
-        if simulator.cadet_path:
-            cadet_path = Path(simulator.cadet_path)
+        if simulator.install_path:
+            cadet_path = Path(simulator.install_path)
             if cadet_path.is_file():
                 path = str(cadet_path.parent)
             elif cadet_path.is_dir():
                 path = str(cadet_path)
             else:
-                path = str(simulator.cadet_path)
+                path = str(simulator.install_path)
             return path, "Auto-detected via CADET-Process"
     except Exception:
         pass
