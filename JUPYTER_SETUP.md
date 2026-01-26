@@ -36,7 +36,18 @@ import os
 os.environ["CADET_PATH"] = "/opt/CADET/latest"
 
 #  5b. on startup of a juypter notebook
-#TODO: add command here
+KERNEL_DIR="$(jupyter --data-dir)/kernels/cadet_simplified"
+python - <<'PY'
+import json, os
+p = os.path.join(os.environ["KERNEL_DIR"], "kernel.json")
+with open(p, "r", encoding="utf-8") as f:
+    data = json.load(f)
+data.setdefault("env", {})["CADET_PATH"] = "/opt/CADET/latest"
+with open(p, "w", encoding="utf-8") as f:
+    json.dump(data, f, indent=2)
+    f.write("\n")
+print("Updated:", p)
+PY
 ```
 
 ---
