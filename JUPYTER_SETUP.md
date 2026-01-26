@@ -16,7 +16,10 @@ conda activate cadet
 # 2. Install CADET solver
 conda install -c conda-forge cadet -y
 
-# 3. Install the package (from local repo)
+# 3. Install the package (directly from github - recommended)
+python -m pip install "git+https://github.com/MoritzImendoerffer/cadetgui.git"
+
+# 3a. Install the package (from local repo - alternative)
 cd /path/to/cadet_simplified
 pip install -e .
 
