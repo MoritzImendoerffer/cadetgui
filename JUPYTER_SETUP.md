@@ -40,6 +40,43 @@ Done! Start JupyterLab and select the "Python (CADET Simplified)" kernel.
 
 ---
 
+## Verification
+
+After setup, verify CADET is configured correctly in a notebook:
+
+```python
+# Check CADET_PATH environment variable
+import os
+cadet_path = os.environ.get("CADET_PATH")
+print(f"CADET_PATH: {cadet_path}")
+
+# Check if cadet-cli binary exists
+import shutil
+cadet_binary = shutil.which(cadet_path + "/bin/cadet-cli")
+print(f"CADET binary found at: {cadet_binary}")
+
+# Verify it's executable (optional - more thorough check)
+if cadet_binary:
+    import subprocess
+    try:
+        result = subprocess.run([cadet_binary, "--version"], 
+                              capture_output=True, text=True, timeout=5)
+        print(f"CADET version check: {result.stdout.strip()}")
+    except Exception as e:
+        print(f"Error running CADET: {e}")
+else:
+    print("WARNING: CADET binary not found!")
+```
+
+Expected output:
+- `CADET_PATH` should show `/opt/CADET/latest` (or your configured path)
+- `CADET binary found at` should show the full path to `cadet-cli`
+- `CADET version check` should display version information
+
+If any checks fail, see the [Troubleshooting](#troubleshooting) section below.
+
+---
+
 ## Option A: Conda Setup (Recommended)
 
 Conda can install both Python packages and the CADET solver binary.
