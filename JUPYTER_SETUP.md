@@ -28,7 +28,15 @@ pip install ipykernel
 python -m ipykernel install --user --name cadet_simplified --display-name "Python (CADET Simplified)"
 
 # 5. Set CADET path (add to ~/.bashrc for persistence)
-export CADET_PATH="$CONDA_PREFIX/bin"
+grep -qxF 'export CADET_PATH=/opt/CADET/latest' ~/.bashrc || echo 'export CADET_PATH=/opt/CADET/latest' >> ~/.bashrc
+
+# 5a. optionally, export the environment variable e.g. in a cell of a notebook:
+
+import os
+os.environ["CADET_PATH"] = "/opt/CADET/latest"
+
+#  5b. on startup of a juypter notebook
+#TODO: add command here
 ```
 
 ---
@@ -49,10 +57,30 @@ pip install -e .
 
 # 3. Register as Jupyter kernel
 pip install ipykernel
-python -m ipykernel install --user --name cadet --display-name "Python (CADET)"
+python -m ipykernel install --user --name cadet_simplified --display-name "Python (CADET Simplified)"
 
-# 4. Set CADET path if auto-detection fails (add to ~/.bashrc for persistence)
-export CADET_PATH="/path/to/cadet/bin"
+# 4. Set CADET path (add to ~/.bashrc for persistence)
+grep -qxF 'export CADET_PATH=/opt/CADET/latest' ~/.bashrc || echo 'export CADET_PATH=/opt/CADET/latest' >> ~/.bashrc
+
+# 4a. optionally, export the environment variable e.g. in a cell of a notebook:
+
+import os
+os.environ["CADET_PATH"] = "/opt/CADET/latest"
+
+# 4b. on startup of a juypter notebook
+
+KERNEL_DIR="$(jupyter --data-dir)/kernels/cadet_simplified"
+python - <<'PY'
+import json, os
+p = os.path.join(os.environ["KERNEL_DIR"], "kernel.json")
+with open(p, "r", encoding="utf-8") as f:
+    data = json.load(f)
+data.setdefault("env", {})["CADET_PATH"] = "/opt/CADET/latest"
+with open(p, "w", encoding="utf-8") as f:
+    json.dump(data, f, indent=2)
+    f.write("\n")
+print("Updated:", p)
+PY
 ```
 
 ---
