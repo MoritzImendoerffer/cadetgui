@@ -4,94 +4,204 @@ How to set up `cadet_simplified` in a new environment and make it available as a
 
 ---
 
+## Quick Start (Conda - Recommended)
+
+For the fastest path to a working setup:
+
+```bash
+conda create -n cadet_simplified python=3.10 -y
+```
+
+```bash
+conda activate cadet_simplified
+```
+
+```bash
+conda install -c conda-forge cadet -y
+```
+
+```bash
+python -m pip install "git+https://github.com/MoritzImendoerffer/cadetgui.git"
+```
+
+```bash
+pip install ipykernel
+```
+
+```bash
+python -m ipykernel install --user --name cadet_simplified --display-name "Python (CADET Simplified)"
+```
+
+```bash
+python -c "import json,subprocess,pathlib; p=pathlib.Path(subprocess.run(['jupyter','--data-dir'],capture_output=True,text=True).stdout.strip())/'kernels'/'cadet_simplified'/'kernel.json'; d=json.loads(p.read_text()); d.setdefault('env',{})['CADET_PATH']='/opt/CADET/latest'; p.write_text(json.dumps(d,indent=2)+'\n')"
+```
+
+Done! Start JupyterLab and select the "Python (CADET Simplified)" kernel.
+
+---
+
 ## Option A: Conda Setup (Recommended)
 
 Conda can install both Python packages and the CADET solver binary.
 
+### 1. Environment Setup
+
+Create environment with Python 3.10:
+
 ```bash
-# 1. Create and activate environment
-conda create -n cadet python=3.10 -y
-conda activate cadet
+conda create -n cadet_simplified python=3.10 -y
+```
 
-# 2. Install CADET solver
+Activate the environment:
+
+```bash
+conda activate cadet_simplified
+```
+
+### 2. Install CADET Solver
+
+```bash
 conda install -c conda-forge cadet -y
+```
 
-# 3. Install the package (directly from github - recommended)
+### 3. Install cadet_simplified Package
+
+**Choose one:**
+
+**Option 3a: From GitHub (recommended)**
+
+```bash
 python -m pip install "git+https://github.com/MoritzImendoerffer/cadetgui.git"
+```
 
-# 3a. Install the package (from local repo - alternative)
+**Option 3b: From local repository**
+
+```bash
 cd /path/to/cadet_simplified
+```
+
+```bash
 pip install -e .
+```
 
-# 4. Register as Jupyter kernel
+### 4. Register Jupyter Kernel
+
+Install ipykernel:
+
+```bash
 pip install ipykernel
+```
+
+Register the kernel:
+
+```bash
 python -m ipykernel install --user --name cadet_simplified --display-name "Python (CADET Simplified)"
+```
 
-# 5. Set CADET path (add to ~/.bashrc for persistence)
+### 5. Configure CADET Path
+
+**Choose one:**
+
+**Option 5a: Set in kernel config (recommended - automatic on kernel startup)**
+
+```bash
+python -c "import json,subprocess,pathlib; p=pathlib.Path(subprocess.run(['jupyter','--data-dir'],capture_output=True,text=True).stdout.strip())/'kernels'/'cadet_simplified'/'kernel.json'; d=json.loads(p.read_text()); d.setdefault('env',{})['CADET_PATH']='/opt/CADET/latest'; p.write_text(json.dumps(d,indent=2)+'\n')"
+```
+
+**Option 5b: Add to ~/.bashrc (for all terminal sessions)**
+
+```bash
 grep -qxF 'export CADET_PATH=/opt/CADET/latest' ~/.bashrc || echo 'export CADET_PATH=/opt/CADET/latest' >> ~/.bashrc
+```
 
-# 5a. optionally, export the environment variable e.g. in a cell of a notebook:
+**Option 5c: Set in notebook (manual - per notebook)**
 
+```python
 import os
 os.environ["CADET_PATH"] = "/opt/CADET/latest"
-
-#  5b. on startup of a juypter notebook
-KERNEL_DIR="$(jupyter --data-dir)/kernels/cadet_simplified"
-python - <<'PY'
-import json, os
-p = os.path.join(os.environ["KERNEL_DIR"], "kernel.json")
-with open(p, "r", encoding="utf-8") as f:
-    data = json.load(f)
-data.setdefault("env", {})["CADET_PATH"] = "/opt/CADET/latest"
-with open(p, "w", encoding="utf-8") as f:
-    json.dump(data, f, indent=2)
-    f.write("\n")
-print("Updated:", p)
-PY
 ```
 
 ---
 
 ## Option B: Pip + venv Setup
 
-Use this if you don't have conda or prefer pure pip.
+Use this if you don't have conda or prefer pure pip. Note: CADET solver must be installed separately on your system.
+
+### 1. Environment Setup
+
+Create virtual environment:
 
 ```bash
-# 1. Create and activate venv
 python3 -m venv .venv
-source .venv/bin/activate  # Linux/Mac
-# .venv\Scripts\activate   # Windows
+```
 
-# 2. Install the package
+Activate (Linux/Mac):
+
+```bash
+source .venv/bin/activate
+```
+
+Activate (Windows):
+
+```bash
+.venv\Scripts\activate
+```
+
+### 2. Install cadet_simplified Package
+
+**Choose one:**
+
+**Option 2a: From GitHub (recommended)**
+
+```bash
+python -m pip install "git+https://github.com/MoritzImendoerffer/cadetgui.git"
+```
+
+**Option 2b: From local repository**
+
+```bash
 cd /path/to/cadet_simplified
+```
+
+```bash
 pip install -e .
+```
 
-# 3. Register as Jupyter kernel
+### 3. Register Jupyter Kernel
+
+Install ipykernel:
+
+```bash
 pip install ipykernel
+```
+
+Register the kernel:
+
+```bash
 python -m ipykernel install --user --name cadet_simplified --display-name "Python (CADET Simplified)"
+```
 
-# 4. Set CADET path (add to ~/.bashrc for persistence)
+### 4. Configure CADET Path
+
+**Choose one:**
+
+**Option 4a: Set in kernel config (recommended - automatic on kernel startup)**
+
+```bash
+python -c "import json,subprocess,pathlib; p=pathlib.Path(subprocess.run(['jupyter','--data-dir'],capture_output=True,text=True).stdout.strip())/'kernels'/'cadet_simplified'/'kernel.json'; d=json.loads(p.read_text()); d.setdefault('env',{})['CADET_PATH']='/opt/CADET/latest'; p.write_text(json.dumps(d,indent=2)+'\n')"
+```
+
+**Option 4b: Add to ~/.bashrc (for all terminal sessions)**
+
+```bash
 grep -qxF 'export CADET_PATH=/opt/CADET/latest' ~/.bashrc || echo 'export CADET_PATH=/opt/CADET/latest' >> ~/.bashrc
+```
 
-# 4a. optionally, export the environment variable e.g. in a cell of a notebook:
+**Option 4c: Set in notebook (manual - per notebook)**
 
+```python
 import os
 os.environ["CADET_PATH"] = "/opt/CADET/latest"
-
-# 4b. on startup of a juypter notebook
-
-KERNEL_DIR="$(jupyter --data-dir)/kernels/cadet_simplified"
-python - <<'PY'
-import json, os
-p = os.path.join(os.environ["KERNEL_DIR"], "kernel.json")
-with open(p, "r", encoding="utf-8") as f:
-    data = json.load(f)
-data.setdefault("env", {})["CADET_PATH"] = "/opt/CADET/latest"
-with open(p, "w", encoding="utf-8") as f:
-    json.dump(data, f, indent=2)
-    f.write("\n")
-print("Updated:", p)
-PY
 ```
 
 ---
@@ -100,11 +210,11 @@ PY
 
 | Step | Conda | Pip + venv |
 |------|-------|------------|
-| Create env | `conda create -n cadet python=3.10` | `python3 -m venv .venv` |
-| Activate | `conda activate cadet` | `source .venv/bin/activate` |
+| Create env | `conda create -n cadet_simplified python=3.10` | `python3 -m venv .venv` |
+| Activate | `conda activate cadet_simplified` | `source .venv/bin/activate` |
 | Install CADET | `conda install -c conda-forge cadet` | Already installed on system |
 | Install package | `pip install -e .` | `pip install -e .` |
-| Register kernel | `python -m ipykernel install --user --name cadet` | Same |
+| Register kernel | `python -m ipykernel install --user --name cadet_simplified` | Same |
 
 ---
 
@@ -153,7 +263,7 @@ jupyter kernelspec list
 ### Remove a kernel
 
 ```bash
-jupyter kernelspec uninstall cadet
+jupyter kernelspec uninstall cadet_simplified
 ```
 
 ### Update kernel after environment changes
@@ -168,14 +278,14 @@ If you update packages in the conda environment, the kernel automatically uses t
 
 1. Restart JupyterLab completely
 2. Check kernel is registered: `jupyter kernelspec list`
-3. Re-register if needed: `python -m ipykernel install --user --name cadet --display-name "Python (CADET)"`
+3. Re-register if needed: `python -m ipykernel install --user --name cadet_simplified --display-name "Python (CADET Simplified)"`
 
 ### "No module named cadet_simplified"
 
 The package isn't installed in the kernel's environment:
 
 ```bash
-conda activate cadet
+conda activate cadet_simplified
 pip install -e /path/to/cadet_simplified
 ```
 
@@ -194,7 +304,7 @@ print(shutil.which("cadet-cli"))
 If not found, install CADET or set the path manually:
 
 ```bash
-conda activate cadet
+conda activate cadet_simplified
 conda install -c conda-forge cadet -y
 export CADET_PATH="$CONDA_PREFIX/bin"
 ```
@@ -202,7 +312,7 @@ export CADET_PATH="$CONDA_PREFIX/bin"
 ### Import errors for dependencies
 
 ```bash
-conda activate cadet
+conda activate cadet_simplified
 pip install -r requirements.txt
 ```
 
