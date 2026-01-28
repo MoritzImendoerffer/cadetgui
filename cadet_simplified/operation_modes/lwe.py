@@ -217,7 +217,7 @@ class LWEConcentrationBased(BaseOperationMode):
         # Calculate column volume (in m3)
         column_volume_m3 = column.volume  # CADET-Process calculates this
         column_volume_ml = column_volume_m3 * 1e6  # Convert to mL
-    
+        
         # Convert flow rate: CV/min -> m3/s
         flow_rate_ml_min = params["flow_rate_mL_min"]
         flow_rate_m3_s = flow_rate_ml_min / 1e6 / 60.0  # mL/min -> m3/s
@@ -234,7 +234,8 @@ class LWEConcentrationBased(BaseOperationMode):
         wash_duration = cv_to_seconds(params["wash_cv"])
         elution_duration = cv_to_seconds(params["elution_cv"])
         strip_duration = cv_to_seconds(params["strip_cv"])
-        
+        if np.allclose(strip_duration, 0):
+            strip_duration = 1 # strip duration should not be 0 for the events to work properly
         # Salt concentrations (already in mM == M/m3 which CADET uses)
         load_salt = params["load_salt_mM"]
         wash_salt = params["wash_salt_mM"]
@@ -287,10 +288,11 @@ class LWEConcentrationBased(BaseOperationMode):
         process.cycle_time = cycle_time
         
         event_times = {
-            'Load': equilibration_duration,
-            'Wash': equilibration_duration + load_duration,
-            'Elution': equilibration_duration + load_duration + wash_duration,
-            'Strip': equilibration_duration + load_duration + wash_duration + elution_duration
+            "Equilibration_start": 0,
+            'Load_start': equilibration_duration,
+            'Wash_start': equilibration_duration + load_duration,
+            'Elution_start': equilibration_duration + load_duration + wash_duration,
+            'Elution_stop': equilibration_duration + load_duration + wash_duration + elution_duration
         }
         
         gradient_slope = (np.array(c_elution) - np.array(c_wash)) / elution_duration
@@ -299,10 +301,11 @@ class LWEConcentrationBased(BaseOperationMode):
         inlet = flow_sheet.inlet
         inlet.flow_rate = flow_rate_m3_s
         
-        process.add_event('Load', 'flow_sheet.inlet.c', c_load, time=event_times['Load'])
-        process.add_event('Wash', 'flow_sheet.inlet.c', c_wash, time=event_times['Wash'])
-        process.add_event('grad_start', 'flow_sheet.inlet.c', c_gradient_poly, event_times['Elution'])
-        process.add_event('grad_stop', 'flow_sheet.inlet.c', c_elution, time=event_times['Strip'])
+        process.add_event('Equilibration', 'flow_sheet.inlet.c', c_equilibration)
+        process.add_event('Load', 'flow_sheet.inlet.c', c_load, time=event_times['Load_start'])
+        process.add_event('Wash', 'flow_sheet.inlet.c', c_wash, time=event_times['Wash_start'])
+        process.add_event('ELution start', 'flow_sheet.inlet.c', c_gradient_poly, event_times['Elution_start'])
+        process.add_event('Elution stop', 'flow_sheet.inlet.c', c_elution, time=event_times["Elution_stop"])
         
         return process
     

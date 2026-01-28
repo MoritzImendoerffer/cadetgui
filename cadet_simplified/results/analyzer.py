@@ -86,7 +86,7 @@ class ResultsExporter:
         Number of points for chromatogram interpolation
     """
     
-    def __init__(self, n_interpolation_points: int = 500):
+    def __init__(self, n_interpolation_points: int = 1000):
         """Initialize exporter.
         
         Parameters
