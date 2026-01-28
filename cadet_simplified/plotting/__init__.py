@@ -3,6 +3,10 @@
 Provides reusable plotting functions that work in Jupyter notebooks
 and Panel applications. All functions return HoloViews objects.
 
+Interactive components:
+    >>> from cadet_simplified.plotting import InteractiveChromatogram
+    >>> widget = InteractiveChromatogram(df, title="Exp 1", conversion_params={...})
+
 Example - Single chromatogram:
     >>> from cadet_simplified.plotting import plot_chromatogram
     >>> plot = plot_chromatogram(result)
@@ -47,7 +51,15 @@ from .chromatogram import (
     plot_chromatogram_overlay,
 )
 
+from .interactive import (
+    InteractiveChromatogram,
+    InteractiveChromatogramOverlay,
+)
+
 __all__ = [
+    # Interactive components
+    "InteractiveChromatogram",
+    "InteractiveChromatogramOverlay",
     # Unit conversion helpers
     "calculate_column_volume_mL",
     "time_to_cv",
