@@ -38,10 +38,11 @@ hv.extension("bokeh")
 # =============================================================================
 
 # Bokeh Category10 palette - well-separated base hues
-from bokeh.palettes import Category10, Colorblind
+from bokeh.palettes import Category10
 
 BASE_COLORS = list(Category10[10])
-BASE_COLORS = list(Colorblind[8])
+
+
 def hex_to_rgb(hex_color: str) -> tuple[float, float, float]:
     """Convert hex color to RGB (0-1 range)."""
     hex_color = hex_color.lstrip("#")
@@ -591,11 +592,12 @@ class InteractiveChromatogramOverlay(pn.viewable.Viewer):
         
         # Determine which components go on which axis
         left_components = set(self.left_axis_components) if self.dual_axis else set()
+        right_components = [c for c in self._component_names if c not in left_components]
         
-        # Generate color palette: experiment-based hue, component-based lightness
+        # Generate color palette for right axis components only
         n_experiments = len(self._chromatograms)
-        n_components = len(self._component_names)
-        color_palette = generate_experiment_colors(n_experiments, n_components)
+        n_right_components = len(right_components)
+        right_axis_colors = generate_experiment_colors(n_experiments, max(1, n_right_components))
         
         plots = []
         
@@ -641,9 +643,14 @@ class InteractiveChromatogramOverlay(pn.viewable.Viewer):
                 # Line style: dashed for left axis, solid for right
                 line_dash = "dashed" if is_left and self.dual_axis else "solid"
                 
-                # Get color based on experiment and component index
-                comp_idx = self._component_names.index(comp) if comp in self._component_names else 0
-                color = color_palette[exp_idx][comp_idx]
+                # Color: base color for left axis, varied for right axis
+                if is_left and self.dual_axis:
+                    # Left axis: use brightest base color (same as first right axis component)
+                    color = right_axis_colors[exp_idx][0]
+                else:
+                    # Right axis: vary by component index within right components
+                    right_idx = right_components.index(comp) if comp in right_components else 0
+                    color = right_axis_colors[exp_idx][right_idx]
                 
                 p = _df.hvplot.line(
                     x=time_col,
