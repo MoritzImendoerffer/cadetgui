@@ -215,7 +215,13 @@ class InteractiveChromatogram(pn.viewable.Viewer):
             self._normalize_checkbox,
             pn.Spacer(width=20),
             self._x_axis_select,
-            align="center",
+            align="start",
+        )
+        
+        controls_card = pn.Card(
+            controls,
+            hide_header=True,
+            sizing_mode="stretch_width",
         )
         
         plot_pane = pn.pane.HoloViews(
@@ -224,7 +230,7 @@ class InteractiveChromatogram(pn.viewable.Viewer):
         )
         
         return pn.Column(
-            controls,
+            controls_card,
             plot_pane,
             sizing_mode="stretch_width",
         )
@@ -465,7 +471,14 @@ class InteractiveChromatogramOverlay(pn.viewable.Viewer):
             self._normalize_checkbox,
             pn.Spacer(width=20),
             self._x_axis_select,
-            align="center",
+            align="start",
+        )
+        
+        controls_card = pn.Card(
+            controls,
+            self._warning_pane,
+            hide_header=True,
+            sizing_mode="stretch_width",
         )
         
         plot_pane = pn.pane.HoloViews(
@@ -474,8 +487,7 @@ class InteractiveChromatogramOverlay(pn.viewable.Viewer):
         )
         
         return pn.Column(
-            controls,
-            self._warning_pane,
+            controls_card,
             plot_pane,
             sizing_mode="stretch_width",
         )
