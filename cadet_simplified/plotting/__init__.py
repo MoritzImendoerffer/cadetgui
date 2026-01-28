@@ -16,12 +16,19 @@ Example - From cached DataFrame:
     >>> from cadet_simplified.plotting import plot_chromatogram_from_df
     >>> df = pd.read_parquet("chromatogram.parquet")
     >>> plot = plot_chromatogram_from_df(df)
+
+Example - Inlet profile from process events:
+    >>> from cadet_simplified.plotting import plot_inlet_profile
+    >>> plot = plot_inlet_profile(process, normalized=True)
 """
 
 from .chromatogram import (
     # Interpolation
     interpolate_chromatogram,
     get_component_names,
+    # Inlet profile (from Process events)
+    get_inlet_profile_df,
+    plot_inlet_profile,
     # From DataFrame (cached)
     plot_chromatogram_from_df,
     plot_chromatogram_overlay_from_df,
@@ -34,6 +41,9 @@ __all__ = [
     # Interpolation
     "interpolate_chromatogram",
     "get_component_names",
+    # Inlet profile
+    "get_inlet_profile_df",
+    "plot_inlet_profile",
     # From DataFrame
     "plot_chromatogram_from_df",
     "plot_chromatogram_overlay_from_df",

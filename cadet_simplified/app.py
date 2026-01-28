@@ -35,7 +35,12 @@ from .simulation import SimulationRunner, SimulationResultWrapper, ValidationRes
 from .plotting import (
     plot_chromatogram_from_df,
     plot_chromatogram_overlay_from_df,
+    plot_inlet_profile,
 )
+
+
+# Maximum number of chromatograms to preview in Saved tab
+MAX_PREVIEW_CHROMATOGRAMS = 10
 
 
 class SimplifiedCADETApp(param.Parameterized):
@@ -93,6 +98,7 @@ class SimplifiedCADETApp(param.Parameterized):
         self._current_parse_result: ParseResult | None = None
         self._simulation_results: list[SimulationResultWrapper] = []
         self._component_names: list[str] = self._default_component_names()
+        self._validated_processes: list = []  # Store validated processes for simulation
         
         # Analysis state
         self._loaded_experiments: list[LoadedExperiment] = []
@@ -155,8 +161,19 @@ class SimplifiedCADETApp(param.Parameterized):
         )
         self._validate_btn.on_click(self._on_validate)
         
+        # Checkbox for normalized inlet plot
+        self._inlet_normalized_checkbox = pn.widgets.Checkbox(
+            name="Normalize inlet plot",
+            value=False,
+        )
+        
         self._validation_output = pn.Column(
             pn.pane.Markdown("*Upload a filled template to validate*"),
+            sizing_mode='stretch_width',
+        )
+        
+        # Area for inlet profile plot (shown after validation)
+        self._inlet_plot_area = pn.Column(
             sizing_mode='stretch_width',
         )
         
@@ -190,6 +207,11 @@ class SimplifiedCADETApp(param.Parameterized):
             visible=False,
         )
         
+        self._simulation_status_text = pn.pane.Markdown(
+            "",
+            sizing_mode='stretch_width',
+        )
+        
         self._simulation_output = pn.Column(
             pn.pane.Markdown("*Validate configuration first, then run simulations*"),
             sizing_mode='stretch_width',
@@ -198,7 +220,7 @@ class SimplifiedCADETApp(param.Parameterized):
         # === Tab 4: Saved Experiments ===
         self._saved_experiments_table = pn.widgets.Tabulator(
             pd.DataFrame(),
-            height=350,
+            height=300,
             sizing_mode='stretch_width',
             selectable='checkbox',
             pagination='local',
@@ -218,6 +240,18 @@ class SimplifiedCADETApp(param.Parameterized):
             width=200,
         )
         self._load_data_btn.on_click(self._on_load_data)
+        
+        # Preview Selected button and plot area
+        self._preview_selected_btn = pn.widgets.Button(
+            name="Preview Selected",
+            button_type="light",
+            width=150,
+        )
+        self._preview_selected_btn.on_click(self._on_preview_selected)
+        
+        self._preview_plot_area = pn.Column(
+            sizing_mode='stretch_width',
+        )
         
         self._load_progress = pn.indicators.Progress(
             name='Loading',
@@ -324,7 +358,7 @@ class SimplifiedCADETApp(param.Parameterized):
             )
             
             self._template_download_area.objects = [
-                pn.pane.Markdown(f"✓ Template generated: **{filename}**"),
+                pn.pane.Alert(f"Template generated: {filename}", alert_type="success"),
                 download_widget,
             ]
             
@@ -347,16 +381,20 @@ class SimplifiedCADETApp(param.Parameterized):
             self._current_parse_result = result
             
             if not result.success:
-                error_md = "### ❌ Parse Errors\n\n"
+                error_md = "### Parse Errors\n\n"
                 for error in result.errors:
                     error_md += f"- {error}\n"
                 if result.warnings:
-                    error_md += "\n### ⚠️ Warnings\n\n"
+                    error_md += "\n### Warnings\n\n"
                     for warning in result.warnings:
                         error_md += f"- {warning}\n"
                 
-                self._validation_output.objects = [pn.pane.Markdown(error_md)]
+                self._validation_output.objects = [
+                    pn.pane.Alert("Parse errors in uploaded file", alert_type="danger"),
+                    pn.pane.Markdown(error_md),
+                ]
                 self._validate_btn.disabled = True
+                self._inlet_plot_area.objects = []
                 self.status = "Parse errors in uploaded file. Fix and re-upload."
                 self._update_status("danger")
                 return
@@ -388,28 +426,32 @@ class SimplifiedCADETApp(param.Parameterized):
                 ]
             
             self._validate_btn.disabled = False
+            self._inlet_plot_area.objects = []
             
             n_exp = len(result.experiments)
             self.status = f"Parsed {n_exp} experiment(s). Click 'Validate Configuration' to check."
             self._update_status("info")
             
-            success_md = f"### ✓ Parsed Successfully\n\n"
+            success_md = f"### Parse Summary\n\n"
             success_md += f"- **{n_exp}** experiments found\n"
             success_md += f"- Column model: {result.column_binding.column_model}\n"
             success_md += f"- Binding model: {result.column_binding.binding_model}\n"
             
             if result.warnings:
-                success_md += "\n### ⚠️ Warnings\n\n"
+                success_md += "\n### Warnings\n\n"
                 for warning in result.warnings:
                     success_md += f"- {warning}\n"
             
-            self._validation_output.objects = [pn.pane.Markdown(success_md)]
+            self._validation_output.objects = [
+                pn.pane.Alert("File parsed successfully", alert_type="success"),
+                pn.pane.Markdown(success_md),
+            ]
             
         except Exception as e:
             self.status = f"Error reading file: {str(e)}"
             self._update_status("danger")
             self._validation_output.objects = [
-                pn.pane.Markdown(f"### ❌ Error\n\n{str(e)}")
+                pn.pane.Alert(f"Error reading file: {str(e)}", alert_type="danger"),
             ]
     
     def _on_validate(self, event):
@@ -422,6 +464,7 @@ class SimplifiedCADETApp(param.Parameterized):
         
         validation_results = []
         all_valid = True
+        self._validated_processes = []
         
         for exp in result.experiments:
             try:
@@ -429,8 +472,11 @@ class SimplifiedCADETApp(param.Parameterized):
                 val_result = self.runner.validate(process, exp.name)
                 validation_results.append(val_result)
                 
-                if not val_result.valid:
+                if val_result.valid:
+                    self._validated_processes.append(process)
+                else:
                     all_valid = False
+                    self._validated_processes.append(None)
                     
             except Exception as e:
                 validation_results.append(ValidationResult(
@@ -439,91 +485,158 @@ class SimplifiedCADETApp(param.Parameterized):
                     errors=[f"Failed to create process: {str(e)}"],
                 ))
                 all_valid = False
+                self._validated_processes.append(None)
         
         if all_valid:
-            md = "### ✓ All Configurations Valid\n\n"
+            md = "### Validation Results\n\n"
             for vr in validation_results:
-                md += f"- **{vr.experiment_name}**: ✓ Valid\n"
+                md += f"- **{vr.experiment_name}**: Valid\n"
                 if vr.warnings:
                     for w in vr.warnings:
-                        md += f"  - ⚠️ {w}\n"
+                        md += f"  - Warning: {w}\n"
             
             self._simulate_btn.disabled = False
             self.status = "Configuration valid! Ready to simulate."
             self._update_status("success")
+            
+            # Show inlet profile plot for first valid process
+            self._show_inlet_profile_plot()
+            
+            # Update validation output with Alert + details
+            self._validation_output.objects = [
+                self._validation_output.objects[0] if self._validation_output.objects else pn.pane.Markdown(""),
+                pn.pane.Alert("All configurations valid", alert_type="success"),
+                pn.pane.Markdown(md),
+            ]
+            
         else:
-            md = "### ❌ Validation Errors\n\n"
+            md = "### Validation Results\n\n"
             for vr in validation_results:
                 if vr.valid:
-                    md += f"- **{vr.experiment_name}**: ✓ Valid\n"
+                    md += f"- **{vr.experiment_name}**: Valid\n"
                 else:
-                    md += f"- **{vr.experiment_name}**: ❌ Invalid\n"
+                    md += f"- **{vr.experiment_name}**: FAILED\n"
                     for err in vr.errors:
                         md += f"  - {err}\n"
             
             self._simulate_btn.disabled = True
+            self._inlet_plot_area.objects = []
             self.status = "Validation failed. Fix errors and re-upload."
             self._update_status("danger")
+            
+            # Update validation output with Alert + details
+            self._validation_output.objects = [
+                self._validation_output.objects[0] if self._validation_output.objects else pn.pane.Markdown(""),
+                pn.pane.Alert("Validation errors found", alert_type="danger"),
+                pn.pane.Markdown(md),
+            ]
+    
+    def _show_inlet_profile_plot(self):
+        """Show inlet profile plot for the first validated process."""
+        # Find first valid process
+        process = None
+        for p in self._validated_processes:
+            if p is not None:
+                process = p
+                break
         
-        self._validation_output.objects = [
-            self._validation_output.objects[0] if self._validation_output.objects else pn.pane.Markdown(""),
-            pn.pane.Markdown(md),
-        ]
+        if process is None:
+            self._inlet_plot_area.objects = []
+            return
+        
+        try:
+            normalized = self._inlet_normalized_checkbox.value
+            plot = plot_inlet_profile(
+                process,
+                title=f"Inlet Profile: {process.name}",
+                normalized=normalized,
+                width=700,
+                height=350,
+            )
+            
+            # Watch checkbox for changes
+            def update_plot(event):
+                self._show_inlet_profile_plot()
+            
+            self._inlet_normalized_checkbox.param.watch(update_plot, 'value')
+            
+            self._inlet_plot_area.objects = [
+                pn.pane.Markdown("### Inlet Concentration Profile"),
+                self._inlet_normalized_checkbox,
+                pn.pane.HoloViews(plot, sizing_mode='stretch_width'),
+            ]
+            
+        except Exception as e:
+            self._inlet_plot_area.objects = [
+                pn.pane.Alert(f"Could not generate inlet plot: {e}", alert_type="warning")
+            ]
     
     def _on_simulate(self, event):
-        """Run simulations and save results to storage."""
+        """Run simulations using run_batch with progress callback."""
         if self._current_parse_result is None:
             return
         
-        result = self._current_parse_result
-        mode = get_operation_mode(self.operation_mode)
+        if not self._validated_processes:
+            self.status = "No validated processes. Please validate first."
+            self._update_status("warning")
+            return
         
-        self._simulation_results = []
+        result = self._current_parse_result
+        
+        # Filter to only valid processes
+        valid_processes = [p for p in self._validated_processes if p is not None]
+        
+        if not valid_processes:
+            self.status = "No valid processes to simulate."
+            self._update_status("warning")
+            return
+        
         self._simulation_progress.visible = True
         self._simulation_progress.value = 0
+        self._simulation_status_text.object = ""
         
-        n_experiments = len(result.experiments)
         output_items = [pn.pane.Markdown("### Simulation Progress\n")]
+        self._simulation_output.objects = output_items
         
-        for i, exp in enumerate(result.experiments):
-            progress = int((i / n_experiments) * 100)
+        n_total = len(valid_processes)
+        
+        # Progress callback for run_batch
+        def progress_callback(current, total, sim_result):
+            progress = int((current / total) * 100)
             self._simulation_progress.value = progress
-            self.status = f"Simulating {exp.name} ({i+1}/{n_experiments})..."
-            self._update_status("info")
+            self._simulation_status_text.object = f"**Simulating {current}/{total}...**"
             
-            try:
-                process = mode.create_process(exp, result.column_binding)
-                sim_result = self.runner.run(process)
-                self._simulation_results.append(sim_result)
-                
-                if sim_result.success:
-                    output_items.append(
-                        pn.pane.Markdown(f"✓ **{exp.name}**: Completed in {sim_result.runtime_seconds:.2f}s")
-                    )
-                else:
-                    error_msg = "; ".join(sim_result.errors[:2])
-                    output_items.append(
-                        pn.pane.Markdown(f"❌ **{exp.name}**: Failed - {error_msg}")
-                    )
-                    
-            except Exception as e:
-                self._simulation_results.append(SimulationResultWrapper(
-                    experiment_name=exp.name,
-                    success=False,
-                    errors=[str(e)],
-                ))
+            # Update output items
+            if sim_result.success:
                 output_items.append(
-                    pn.pane.Markdown(f"❌ **{exp.name}**: Error - {str(e)}")
+                    pn.pane.Alert(
+                        f"{sim_result.experiment_name}: Completed in {sim_result.runtime_seconds:.2f}s",
+                        alert_type="success"
+                    )
                 )
+            else:
+                error_msg = "; ".join(sim_result.errors[:2]) if sim_result.errors else "Unknown error"
+                output_items.append(
+                    pn.pane.Alert(
+                        f"{sim_result.experiment_name}: Failed - {error_msg}",
+                        alert_type="danger"
+                    )
+                )
+            self._simulation_output.objects = output_items
+        
+        # Run batch simulation
+        self._simulation_results = self.runner.run_batch(
+            valid_processes,
+            progress_callback=progress_callback,
+        )
         
         self._simulation_progress.value = 100
         self._simulation_progress.visible = False
+        self._simulation_status_text.object = ""
         
         successful = sum(1 for r in self._simulation_results if r.success)
-        self.status = f"Completed: {successful}/{n_experiments} simulations successful."
-        self._update_status("success" if successful == n_experiments else "warning")
-        
-        self._simulation_output.objects = output_items
+        self.status = f"Completed: {successful}/{n_total} simulations successful."
+        self._update_status("success" if successful == n_total else "warning")
         
         # Save to storage if any successful
         if successful > 0:
@@ -531,20 +644,32 @@ class SimplifiedCADETApp(param.Parameterized):
                 timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
                 set_name = f"Simulation_{timestamp}"
                 
+                # Match results back to experiments
+                valid_experiments = [
+                    exp for exp, p in zip(result.experiments, self._validated_processes)
+                    if p is not None
+                ]
+                
                 set_id = self.storage.save_experiment_set(
                     name=set_name,
                     operation_mode=self.operation_mode,
-                    experiments=result.experiments,
+                    experiments=valid_experiments,
                     column_binding=result.column_binding,
                     results=self._simulation_results,
                 )
                 
-                output_items.append(pn.pane.Markdown(f"\n✓ Results saved. Set ID: `{set_id}`"))
+                output_items.append(pn.pane.Alert(
+                    f"Results saved. Set ID: {set_id}",
+                    alert_type="success"
+                ))
                 output_items.append(pn.pane.Markdown("*Go to the 'Saved' tab to browse and analyze results.*"))
                 self._simulation_output.objects = output_items
                 
             except Exception as e:
-                output_items.append(pn.pane.Markdown(f"\n⚠️ Warning: Could not save results: {e}"))
+                output_items.append(pn.pane.Alert(
+                    f"Could not save results: {e}",
+                    alert_type="warning"
+                ))
                 self._simulation_output.objects = output_items
     
     def _on_refresh_saved(self, event):
@@ -572,9 +697,79 @@ class SimplifiedCADETApp(param.Parameterized):
                 display_df = df[[c for c in display_cols if c in df.columns]].copy()
                 self._saved_experiments_table.value = display_df
                 self._loaded_info.object = f"*{len(df)} experiment(s) available. Select and click 'Load Selected for Analysis'.*"
+            
+            # Clear preview
+            self._preview_plot_area.objects = []
                 
         except Exception as e:
             self._loaded_info.object = f"*Error loading experiments: {e}*"
+    
+    def _on_preview_selected(self, event):
+        """Preview chromatograms for selected experiments (quick view)."""
+        selection = self._saved_experiments_table.selection
+        
+        if not selection:
+            self._preview_plot_area.objects = [
+                pn.pane.Alert("No experiments selected. Click checkboxes to select.", alert_type="info")
+            ]
+            return
+        
+        df = self._saved_experiments_table.value
+        if df is None or df.empty:
+            return
+        
+        # Get selected rows
+        selected_rows = df.iloc[selection]
+        n_selected = len(selected_rows)
+        
+        # Warn and limit if too many
+        if n_selected > MAX_PREVIEW_CHROMATOGRAMS:
+            show_limit_warning = True
+            selected_rows = selected_rows.head(MAX_PREVIEW_CHROMATOGRAMS)
+        else:
+            show_limit_warning = False
+        
+        # Load chromatograms (fast path - parquet only)
+        chromatograms = []
+        for _, row in selected_rows.iterrows():
+            set_id = row["experiment_set_id"]
+            exp_name = row["experiment_name"]
+            set_name = row.get("experiment_set_name", set_id)
+            
+            chrom_df = self.storage.get_chromatogram(set_id, exp_name)
+            if chrom_df is not None:
+                label = f"{set_name}/{exp_name}"
+                chromatograms.append((label, chrom_df))
+        
+        if not chromatograms:
+            self._preview_plot_area.objects = [
+                pn.pane.Alert("No chromatogram data available for selected experiments.", alert_type="warning")
+            ]
+            return
+        
+        # Create overlay plot
+        try:
+            plot = plot_chromatogram_overlay_from_df(
+                chromatograms,
+                title=f"Preview ({len(chromatograms)} experiments)",
+                width=800,
+                height=400,
+            )
+            
+            components = []
+            if show_limit_warning:
+                components.append(pn.pane.Alert(
+                    f"{n_selected} experiments selected. Showing first {MAX_PREVIEW_CHROMATOGRAMS} only.",
+                    alert_type="warning"
+                ))
+            components.append(pn.pane.HoloViews(plot, sizing_mode='stretch_width'))
+            
+            self._preview_plot_area.objects = components
+            
+        except Exception as e:
+            self._preview_plot_area.objects = [
+                pn.pane.Alert(f"Could not create preview: {e}", alert_type="danger")
+            ]
     
     def _on_load_data(self, event):
         """Load selected experiments for analysis."""
@@ -611,7 +806,7 @@ class SimplifiedCADETApp(param.Parameterized):
             self._load_progress.visible = False
             
             n_loaded = len(self._loaded_experiments)
-            self._loaded_info.object = f"✓ **{n_loaded}** experiment(s) loaded. Go to 'Analysis' tab to analyze."
+            self._loaded_info.object = f"**{n_loaded}** experiment(s) loaded. Go to 'Analysis' tab to analyze."
             
             # Enable analysis button
             self._analyse_btn.disabled = False
@@ -745,10 +940,10 @@ class SimplifiedCADETApp(param.Parameterized):
             
             # Result info
             if exp.result.success:
-                row["Status"] = "✓ Success"
+                row["Status"] = "Success"
                 row["Runtime (s)"] = f"{exp.result.runtime_seconds:.2f}"
             else:
-                row["Status"] = "✗ Failed"
+                row["Status"] = "Failed"
                 row["Runtime (s)"] = "-"
             
             rows.append(row)
@@ -780,6 +975,7 @@ class SimplifiedCADETApp(param.Parameterized):
             self._config_preview,
             pn.Row(self._validate_btn),
             self._validation_output,
+            self._inlet_plot_area,
             sizing_mode='stretch_width',
         )
         
@@ -788,6 +984,7 @@ class SimplifiedCADETApp(param.Parameterized):
             pn.pane.Markdown("## 3. Run Simulations"),
             pn.Row(self._simulate_btn),
             self._simulation_progress,
+            self._simulation_status_text,
             self._simulation_output,
             sizing_mode='stretch_width',
         )
@@ -796,10 +993,12 @@ class SimplifiedCADETApp(param.Parameterized):
         saved_tab = pn.Column(
             pn.pane.Markdown("## 4. Saved Experiments"),
             pn.pane.Markdown("*Select experiments to load for analysis*"),
-            pn.Row(self._refresh_saved_btn, self._load_data_btn),
+            pn.Row(self._refresh_saved_btn, self._preview_selected_btn, self._load_data_btn),
             self._load_progress,
             self._saved_experiments_table,
             self._loaded_info,
+            pn.layout.Divider(),
+            self._preview_plot_area,
             sizing_mode='stretch_width',
         )
         
