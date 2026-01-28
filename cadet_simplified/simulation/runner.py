@@ -227,9 +227,11 @@ class SimulationRunner:
         self,
         processes: list["Process"],
         stop_on_error: bool = False,
+        n_cores: int = 4,
+        timeout_per_sim: float | None = None,
         progress_callback: callable = None,
     ) -> list[SimulationResultWrapper]:
-        """Run multiple simulations sequentially.
+        """Run multiple simulations, optionally in parallel.
         
         Parameters
         ----------
@@ -237,32 +239,104 @@ class SimulationRunner:
             List of process objects
         stop_on_error : bool, default=False
             Stop after first error
+        n_cores : int, default=4
+            Number of parallel processes (1 = sequential)
+        timeout_per_sim : float, optional
+            Timeout in seconds for each simulation (parallel mode only)
         progress_callback : callable, optional
             Called after each simulation: callback(current, total, result)
+            Note: In parallel mode, results may arrive out of order.
             
         Returns
         -------
         list[SimulationResultWrapper]
-            Results in same order as input
+            Results in same order as input processes
         """
         total = len(processes)
-        results = []
         
-        for i, process in enumerate(processes):
-            result = self.run(process)
-            results.append(result)
+        # Sequential execution
+        if n_cores == 1:
+            results = []
+            for i, process in enumerate(processes):
+                result = self.run(process)
+                results.append(result)
+                
+                if progress_callback:
+                    progress_callback(i + 1, total, result)
+                
+                if not result.success and stop_on_error:
+                    # Fill remaining with cancelled
+                    for remaining in processes[i + 1:]:
+                        results.append(SimulationResultWrapper(
+                            experiment_name=remaining.name,
+                            success=False,
+                            errors=["Skipped due to previous error"],
+                        ))
+                    break
             
-            if progress_callback:
-                progress_callback(i + 1, total, result)
+            return results
+        
+        # Parallel execution
+        from concurrent.futures import ProcessPoolExecutor, as_completed, TimeoutError
+        
+        results_dict: dict[int, SimulationResultWrapper] = {}
+        completed = 0
+        should_stop = False
+        
+        executor = ProcessPoolExecutor(max_workers=n_cores)
+        
+        try:
+            # Submit all tasks and track their indices
+            future_to_idx = {
+                executor.submit(self.run, process): idx
+                for idx, process in enumerate(processes)
+            }
             
-            if not result.success and stop_on_error:
-                # Fill remaining with cancelled
-                for remaining in processes[i + 1:]:
-                    results.append(SimulationResultWrapper(
-                        experiment_name=remaining.name,
+            for future in as_completed(future_to_idx):
+                idx = future_to_idx[future]
+                process = processes[idx]
+                
+                try:
+                    result = future.result(timeout=timeout_per_sim)
+                except TimeoutError:
+                    result = SimulationResultWrapper(
+                        experiment_name=process.name,
                         success=False,
-                        errors=["Skipped due to previous error"],
-                    ))
-                break
+                        errors=[f"Simulation timed out after {timeout_per_sim}s"],
+                    )
+                except Exception as e:
+                    tb = traceback.format_exc()
+                    result = SimulationResultWrapper(
+                        experiment_name=process.name,
+                        success=False,
+                        errors=[f"Execution error: {str(e)}", f"Traceback: {tb}"],
+                    )
+                
+                results_dict[idx] = result
+                completed += 1
+                
+                if progress_callback:
+                    progress_callback(completed, total, result)
+                
+                if not result.success and stop_on_error:
+                    should_stop = True
+                    for remaining_future in future_to_idx:
+                        remaining_future.cancel()
+                    break
         
-        return results
+        finally:
+            executor.shutdown(wait=not should_stop)
+        
+        # Convert dict to ordered list, filling cancelled slots
+        ordered_results = []
+        for i in range(total):
+            if i in results_dict:
+                ordered_results.append(results_dict[i])
+            else:
+                ordered_results.append(SimulationResultWrapper(
+                    experiment_name=processes[i].name,
+                    success=False,
+                    errors=["Simulation was cancelled"],
+                ))
+        
+        return ordered_results

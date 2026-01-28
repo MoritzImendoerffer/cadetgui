@@ -241,8 +241,7 @@ class FileStorage:
                 try:
                     chrom_df = interpolate_chromatogram(
                         result,
-                        n_points=self.n_interpolation_points,
-                        time_unit="minutes",
+                        n_points=self.n_interpolation_points
                     )
                     chrom_df.to_parquet(
                         set_dir / "chromatograms" / f"{safe_name}.parquet",
