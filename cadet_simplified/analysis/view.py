@@ -631,6 +631,15 @@ class AnalysisView:
         }}
         .plot-container {{
             margin: 1rem 0;
+            width: 100%;
+        }}
+        
+        /* Make Bokeh plots responsive */
+        .plot-container > div,
+        .plot-container .bk-root,
+        .plot-container .bk {{
+            width: 100% !important;
+            max-width: 100% !important;
         }}
         .table-responsive {{
             margin: 1rem 0;

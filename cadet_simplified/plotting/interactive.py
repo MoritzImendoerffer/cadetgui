@@ -189,6 +189,7 @@ class InteractiveChromatogram(pn.viewable.Viewer):
             height=self._height,
             legend_position="right",
             show_legend=True,
+            framewise=True,  # Recalculate axis ranges when data changes
             tools=["hover", "pan", "wheel_zoom", "box_zoom", "reset", "save"],
             active_tools=["wheel_zoom"],
         )
@@ -436,6 +437,7 @@ class InteractiveChromatogramOverlay(pn.viewable.Viewer):
             height=self._height,
             legend_position="right",
             show_legend=True,
+            framewise=True,  # Recalculate axis ranges when data changes
             tools=["hover", "pan", "wheel_zoom", "box_zoom", "reset", "save"],
             active_tools=["wheel_zoom"],
         )
