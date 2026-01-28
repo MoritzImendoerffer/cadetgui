@@ -21,6 +21,7 @@ Example - Overlay multiple:
     >>> widget = InteractiveChromatogramOverlay(chromatograms, title="Comparison")
 """
 
+import colorsys
 import panel as pn
 import param
 import holoviews as hv
@@ -30,6 +31,84 @@ import numpy as np
 from .chromatogram import time_to_cv
 
 hv.extension("bokeh")
+
+
+# =============================================================================
+# Color utilities
+# =============================================================================
+
+# Bokeh Category10 palette - well-separated base hues
+from bokeh.palettes import Category10, Colorblind
+
+BASE_COLORS = list(Category10[10])
+BASE_COLORS = list(Colorblind[8])
+def hex_to_rgb(hex_color: str) -> tuple[float, float, float]:
+    """Convert hex color to RGB (0-1 range)."""
+    hex_color = hex_color.lstrip("#")
+    r, g, b = tuple(int(hex_color[i:i+2], 16) / 255.0 for i in (0, 2, 4))
+    return r, g, b
+
+
+def rgb_to_hex(r: float, g: float, b: float) -> str:
+    """Convert RGB (0-1 range) to hex color."""
+    return "#{:02x}{:02x}{:02x}".format(
+        int(r * 255), int(g * 255), int(b * 255)
+    )
+
+
+def generate_experiment_colors(
+    n_experiments: int,
+    n_components: int,
+    saturation_end: float = 0.25,
+    value_end: float = 1.0,
+) -> list[list[str]]:
+    """Generate colors for experiments with varying saturation/value per component.
+    
+    Uses the approach from StackOverflow (ImportanceOfBeingErnest):
+    - Each experiment gets a distinct base hue from Category10
+    - Components vary in saturation (original → 0.25) and value (original → 1.0)
+    - First component = original saturated color, last = lighter/desaturated
+    
+    Parameters
+    ----------
+    n_experiments : int
+        Number of experiments
+    n_components : int
+        Number of components per experiment
+    saturation_end : float
+        Target saturation for last component (0-1)
+    value_end : float
+        Target value/brightness for last component (0-1)
+        
+    Returns
+    -------
+    list[list[str]]
+        Colors[experiment_idx][component_idx] = hex color
+    """
+    colors = []
+    
+    for exp_idx in range(n_experiments):
+        base_hex = BASE_COLORS[exp_idx % len(BASE_COLORS)]
+        r, g, b = hex_to_rgb(base_hex)
+        h, s, v = colorsys.rgb_to_hsv(r, g, b)
+        
+        exp_colors = []
+        for comp_idx in range(n_components):
+            if n_components == 1:
+                # Single component: use original color
+                new_s, new_v = s, v
+            else:
+                # Interpolate saturation and value
+                t = comp_idx / (n_components - 1)
+                new_s = s + t * (saturation_end - s)
+                new_v = v + t * (value_end - v)
+            
+            new_r, new_g, new_b = colorsys.hsv_to_rgb(h, new_s, new_v)
+            exp_colors.append(rgb_to_hex(new_r, new_g, new_b))
+        
+        colors.append(exp_colors)
+    
+    return colors
 
 
 class InteractiveChromatogram(pn.viewable.Viewer):
@@ -513,9 +592,14 @@ class InteractiveChromatogramOverlay(pn.viewable.Viewer):
         # Determine which components go on which axis
         left_components = set(self.left_axis_components) if self.dual_axis else set()
         
+        # Generate color palette: experiment-based hue, component-based lightness
+        n_experiments = len(self._chromatograms)
+        n_components = len(self._component_names)
+        color_palette = generate_experiment_colors(n_experiments, n_components)
+        
         plots = []
         
-        for label, df, conv_params in self._chromatograms:
+        for exp_idx, (label, df, conv_params) in enumerate(self._chromatograms):
             _df = df.copy()
             
             # Find time column
@@ -557,6 +641,10 @@ class InteractiveChromatogramOverlay(pn.viewable.Viewer):
                 # Line style: dashed for left axis, solid for right
                 line_dash = "dashed" if is_left and self.dual_axis else "solid"
                 
+                # Get color based on experiment and component index
+                comp_idx = self._component_names.index(comp) if comp in self._component_names else 0
+                color = color_palette[exp_idx][comp_idx]
+                
                 p = _df.hvplot.line(
                     x=time_col,
                     y=comp,
@@ -566,6 +654,7 @@ class InteractiveChromatogramOverlay(pn.viewable.Viewer):
                 # Apply options
                 opts_kwargs = {
                     "line_dash": line_dash,
+                    "color": color,
                 }
                 
                 # Assign to right axis if dual axis enabled and not a left component
