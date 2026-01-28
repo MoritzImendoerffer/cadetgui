@@ -1,145 +1,110 @@
-"""CADET Simplified - Excel-based chromatography simulation.
+__version__ = "0.2.1"
 
-A simplified interface for CADET-Process simulations using Excel templates.
-
-Example workflow:
-    1. Select operation mode, column model, binding model, and components
-    2. Download Excel template
-    3. Fill in experiment parameters and column/binding parameters
-    4. Upload filled template
-    5. Validate configuration
-    6. Run simulations
-    7. Browse saved experiments
-    8. Analyze selected experiments
-
-Quick start:
-    from cadet_simplified import get_lwe_mode, generate_template
-    mode = get_lwe_mode()
-    generate_template(
-        operation_mode=mode,
-        column_model="GeneralRateModel",
-        binding_model="StericMassAction",
-        n_components=4,
-        component_names=["Salt", "Product", "Impurity1", "Impurity2"],
-        output_path="template.xlsx",
-    )
-
-Storage and analysis:
-    from cadet_simplified.storage import FileResultsStorage
-    from cadet_simplified.analysis import AnalysisView, get_analysis
-    
-    storage = FileResultsStorage("./experiments")
-    loaded = storage.load_results_by_selection([...], n_workers=4)
-    
-    view = AnalysisView()
-    analysis = get_analysis("simple")
-    analysis.run(loaded, view)
-"""
-
-from .operation_modes import (
-    # Base classes
-    BaseOperationMode,
-    ParameterDefinition,
-    ParameterType,
+# Core dataclasses
+from .core import (
+    ComponentDefinition,
     ExperimentConfig,
     ColumnBindingConfig,
-    ComponentDefinition,
-    # Registries
-    SUPPORTED_COLUMN_MODELS,
-    SUPPORTED_BINDING_MODELS,
-    OPERATION_MODES,
-    # Implementations
-    LWEConcentrationBased,
-    get_lwe_mode,
-    get_operation_mode,
 )
 
+# Configuration (JSON-based)
+from .configs import (
+    ParameterDef,
+    ModelConfig,
+    get_binding_model_config,
+    get_column_model_config,
+    list_binding_models,
+    list_column_models,
+)
+
+# Operation modes
+from .operation_modes import (
+    BaseOperationMode,
+    LWEConcentrationBased,
+    get_operation_mode,
+    list_operation_modes,
+)
+
+# Simulation
+from .simulation import (
+    SimulationRunner,
+    SimulationResultWrapper,
+    ValidationResult,
+)
+
+# Excel templates
 from .excel import (
     ExcelTemplateGenerator,
-    generate_template,
     ExcelParser,
     ParseResult,
     parse_excel,
 )
 
+# Storage
 from .storage import (
-    # Interface
-    ResultsStorageInterface,
-    StoredExperimentInfo,
+    FileStorage,
     LoadedExperiment,
-    # File-based implementation
-    FileResultsStorage,
-    # Legacy
-    ExperimentStore,
-    ExperimentSet,
+    ExperimentInfo,
 )
 
-from .simulation import (
-    SimulationRunner,
-    SimulationResultWrapper,
-    ValidationResult,
-    validate_and_report,
+# Plotting
+from .plotting import (
+    interpolate_chromatogram,
+    plot_chromatogram,
+    plot_chromatogram_from_df,
+    plot_chromatogram_overlay,
+    plot_chromatogram_overlay_from_df,
 )
-
-from .results import (
-    ResultsExporter,
-    InterpolatedChromatogram,
-    # Backwards compatibility
-    ResultsAnalyzer,
-)
-
-from .analysis import (
-    AnalysisView,
-    BaseAnalysis,
-    SimpleChromatogramAnalysis,
-    DetailedAnalysis,
-    get_analysis,
-    list_analyses,
-)
-
-__version__ = "0.2.0"
 
 __all__ = [
+    # Version
+    "__version__",
+    # Core
+    "ComponentDefinition",
+    "ExperimentConfig", 
+    "ColumnBindingConfig",
+    # Configs
+    "ParameterDef",
+    "ModelConfig",
+    "get_binding_model_config",
+    "get_column_model_config",
+    "list_binding_models",
+    "list_column_models",
     # Operation modes
-    'BaseOperationMode',
-    'ParameterDefinition',
-    'ParameterType',
-    'ExperimentConfig',
-    'ColumnBindingConfig',
-    'ComponentDefinition',
-    'SUPPORTED_COLUMN_MODELS',
-    'SUPPORTED_BINDING_MODELS',
-    'OPERATION_MODES',
-    'LWEConcentrationBased',
-    'get_lwe_mode',
-    'get_operation_mode',
-    # Excel
-    'ExcelTemplateGenerator',
-    'generate_template',
-    'ExcelParser',
-    'ParseResult',
-    'parse_excel',
-    # Storage
-    'ResultsStorageInterface',
-    'StoredExperimentInfo',
-    'LoadedExperiment',
-    'FileResultsStorage',
-    'ExperimentStore',
-    'ExperimentSet',
+    "BaseOperationMode",
+    "LWEConcentrationBased",
+    "get_operation_mode",
+    "list_operation_modes",
     # Simulation
-    'SimulationRunner',
-    'SimulationResultWrapper',
-    'ValidationResult',
-    'validate_and_report',
-    # Results export
-    'ResultsExporter',
-    'InterpolatedChromatogram',
-    'ResultsAnalyzer',
-    # Analysis
-    'AnalysisView',
-    'BaseAnalysis',
-    'SimpleChromatogramAnalysis',
-    'DetailedAnalysis',
-    'get_analysis',
-    'list_analyses',
+    "SimulationRunner",
+    "SimulationResultWrapper",
+    "ValidationResult",
+    # Excel
+    "ExcelTemplateGenerator",
+    "ExcelParser",
+    "ParseResult",
+    "parse_excel",
+    # Storage
+    "FileStorage",
+    "LoadedExperiment",
+    "ExperimentInfo",
+    # Plotting
+    "interpolate_chromatogram",
+    "plot_chromatogram",
+    "plot_chromatogram_from_df",
+    "plot_chromatogram_overlay",
+    "plot_chromatogram_overlay_from_df",
 ]
+
+
+# Lazy import for app (avoids Panel dependency if not needed)
+def create_app(*args, **kwargs):
+    """Create the GUI application. See app.py for details."""
+    from .app import create_app as _create_app
+    return _create_app(*args, **kwargs)
+
+
+def serve_app(*args, **kwargs):
+    """Serve the GUI application. See app.py for details."""
+    from .app import serve as _serve
+    return _serve(*args, **kwargs)

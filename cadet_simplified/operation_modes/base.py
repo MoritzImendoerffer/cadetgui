@@ -3,102 +3,47 @@
 An operation mode defines a chromatography process type (e.g., Load-Wash-Elute)
 and specifies:
 - What experiment parameters users can modify (lab-friendly units)
-- What column/binding parameters are exposed
 - How to convert the configuration to a CADET Process
+
+Column and binding model parameters are defined in JSON config files,
+not in the operation mode.
 """
 
 from abc import ABC, abstractmethod
-from dataclasses import dataclass, field
-from typing import Any
-from enum import Enum
+from dataclasses import dataclass
+from typing import Any, TYPE_CHECKING
 
-from addict import Dict
+if TYPE_CHECKING:
+    from CADETProcess.processModel import Process
 
-from CADETProcess import processModel
-from CADETProcess.processModel.unitOperation import ChromatographicColumnBase
-
-class ParameterType(Enum):
-    """Type of parameter for Excel template generation."""
-    SCALAR = "scalar"
-    PER_COMPONENT = "per_component"
+from ..core import ExperimentConfig, ColumnBindingConfig
+from ..configs import (
+    get_binding_model_config,
+    get_column_model_config,
+    get_model_class,
+    list_binding_models,
+    list_column_models,
+    ParameterDef,
+)
 
 
 @dataclass
-class ParameterDefinition:
-    """Definition of a single parameter."""
+class ProcessParameterDef:
+    """Definition of a process/experiment parameter.
+    
+    These are the lab-friendly parameters like flow rate, volumes, etc.
+    Defined by operation modes, not by JSON configs.
+    """
     name: str
     display_name: str
     unit: str
     description: str
     default: Any = None
-    param_type: ParameterType = ParameterType.SCALAR
-    required: bool = True
     bounds: tuple[float | None, float | None] = (None, None)
-    
-    def __post_init__(self):
-        """Validate bounds."""
-        if self.bounds[0] is not None and self.bounds[1] is not None:
-            if self.bounds[0] > self.bounds[1]:
-                raise ValueError(f"Lower bound {self.bounds[0]} > upper bound {self.bounds[1]}")
+    required: bool = True
+    per_component: bool = False
 
 
-@dataclass
-class ComponentDefinition:
-    """Definition of a component in the system."""
-    name: str
-    is_salt: bool = False
-    molecular_weight: float | None = None
-
-
-@dataclass 
-class ExperimentConfig:
-    """Configuration for a single experiment parsed from Excel."""
-    name: str
-    parameters: dict[str, Any]
-    components: list[ComponentDefinition]
-
-
-@dataclass
-class ColumnBindingConfig:
-    """Column and binding model configuration parsed from Excel."""
-    column_model: str
-    binding_model: str
-    column_parameters: dict[str, Any]
-    binding_parameters: dict[str, Any]
-    # Per-component parameters stored as lists (indexed by component order)
-    component_column_parameters: dict[str, list[Any]] = field(default_factory=dict)
-    component_binding_parameters: dict[str, list[Any]] = field(default_factory=dict)
-
-
-# Supported models registry
-class ModelRegistry(dict):
-    """Registry supporting both dict and attribute access
-    Provides basic autocompletion at runtime in terminal or juypter cell
-    """
-    
-    def __init__(self, models_dict):
-        super().__init__(models_dict)
-        # Dynamically add attributes for autocomplete
-        for key, value in models_dict.items():
-            setattr(self, key, value)
-    
-    def __repr__(self):
-        return f"Available: {list(self.keys())}"
-     
-SUPPORTED_BINDING_MODELS = dict()
-for name in processModel.binding.__all__:
-    pm = getattr(processModel, name)
-    SUPPORTED_BINDING_MODELS[name] = pm.__module__ + "." + name
-SUPPORTED_BINDING_MODELS = ModelRegistry(SUPPORTED_BINDING_MODELS)
-
-SUPPORTED_COLUMN_MODELS = dict()
-for name in processModel.unitOperation.__all__:
-    uo = getattr(processModel.unitOperation, name)
-    if issubclass(uo, processModel.unitOperation.ChromatographicColumnBase):
-        if uo is not processModel.unitOperation.ChromatographicColumnBase:
-            SUPPORTED_COLUMN_MODELS[name] = uo.__module__ + "." + name
-SUPPORTED_COLUMN_MODELS = ModelRegistry(SUPPORTED_COLUMN_MODELS)           
-            
 class BaseOperationMode(ABC):
     """Abstract base class for operation modes.
     
@@ -107,33 +52,39 @@ class BaseOperationMode(ABC):
     
     Example:
         >>> mode = LWEConcentrationBased()
-        >>> template_config = mode.get_template_config("GeneralRateModel", "StericMassAction", 4)
-        >>> # ... user fills Excel ...
         >>> process = mode.create_process(experiment_config, column_binding_config)
     """
     
     # Subclasses should define these
     name: str = "BaseMode"
     description: str = "Base operation mode"
-    supported_column_models: list[str] = list(SUPPORTED_COLUMN_MODELS.keys())
-    supported_binding_models: list[str] = list(SUPPORTED_BINDING_MODELS.keys())
+    
+    @property
+    def supported_column_models(self) -> list[str]:
+        """List of supported column model names."""
+        return list_column_models()
+    
+    @property
+    def supported_binding_models(self) -> list[str]:
+        """List of supported binding model names."""
+        return list_binding_models()
     
     @abstractmethod
-    def get_experiment_parameters(self) -> list[ParameterDefinition]:
+    def get_experiment_parameters(self) -> list[ProcessParameterDef]:
         """Get the experiment parameters that users can modify.
         
-        These are lab-friendly parameters like flow rate in CV/min,
+        These are lab-friendly parameters like flow rate in mL/min,
         volumes in CV, concentrations in mM, etc.
         
         Returns
         -------
-        list[ParameterDefinition]
+        list[ProcessParameterDef]
             List of parameter definitions for the Experiments sheet
         """
         pass
     
     @abstractmethod
-    def get_component_experiment_parameters(self) -> list[ParameterDefinition]:
+    def get_component_experiment_parameters(self) -> list[ProcessParameterDef]:
         """Get per-component experiment parameters.
         
         These will be repeated for each component in the Excel template.
@@ -141,76 +92,10 @@ class BaseOperationMode(ABC):
         
         Returns
         -------
-        list[ParameterDefinition]
+        list[ProcessParameterDef]
             List of per-component parameter definitions
         """
         pass
-    
-    def get_column_parameters(self, column_model: str) -> list[ParameterDefinition]:
-        """Get column parameters to expose in the template.
-        
-        Default implementation uses introspection on CADET-Process models.
-        Override for custom parameter selection.
-        
-        Parameters
-        ----------
-        column_model : str
-            Name of the column model
-            
-        Returns
-        -------
-        list[ParameterDefinition]
-            List of column parameter definitions
-        """
-        return self._introspect_column_parameters(column_model)
-    
-    def get_binding_parameters(self, binding_model: str) -> list[ParameterDefinition]:
-        """Get binding parameters to expose in the template.
-        
-        Default implementation uses introspection on CADET-Process models.
-        Override for custom parameter selection.
-        
-        Parameters
-        ----------
-        binding_model : str
-            Name of the binding model
-            
-        Returns
-        -------
-        list[ParameterDefinition]
-            List of binding parameter definitions
-        """
-        return self._introspect_binding_parameters(binding_model)
-    
-    def get_component_column_parameters(self, column_model: str) -> list[ParameterDefinition]:
-        """Get per-component column parameters (e.g., film_diffusion).
-        
-        Parameters
-        ----------
-        column_model : str
-            Name of the column model
-            
-        Returns
-        -------
-        list[ParameterDefinition]
-            List of per-component column parameter definitions
-        """
-        return self._introspect_component_column_parameters(column_model)
-    
-    def get_component_binding_parameters(self, binding_model: str) -> list[ParameterDefinition]:
-        """Get per-component binding parameters (e.g., adsorption_rate).
-        
-        Parameters
-        ----------
-        binding_model : str
-            Name of the binding model
-            
-        Returns
-        -------
-        list[ParameterDefinition]
-            List of per-component binding parameter definitions
-        """
-        return self._introspect_component_binding_parameters(binding_model)
     
     @abstractmethod
     def create_process(
@@ -237,14 +122,76 @@ class BaseOperationMode(ABC):
         """
         pass
     
+    def get_column_parameters(self, column_model: str) -> list[ParameterDef]:
+        """Get scalar column parameters from JSON config.
+        
+        Parameters
+        ----------
+        column_model : str
+            Name of the column model
+            
+        Returns
+        -------
+        list[ParameterDef]
+            Scalar column parameter definitions
+        """
+        config = get_column_model_config(column_model)
+        return config.scalar_parameters
+    
+    def get_component_column_parameters(self, column_model: str) -> list[ParameterDef]:
+        """Get per-component column parameters from JSON config.
+        
+        Parameters
+        ----------
+        column_model : str
+            Name of the column model
+            
+        Returns
+        -------
+        list[ParameterDef]
+            Per-component column parameter definitions
+        """
+        config = get_column_model_config(column_model)
+        return config.component_parameters
+    
+    def get_binding_parameters(self, binding_model: str) -> list[ParameterDef]:
+        """Get scalar binding parameters from JSON config.
+        
+        Parameters
+        ----------
+        binding_model : str
+            Name of the binding model
+            
+        Returns
+        -------
+        list[ParameterDef]
+            Scalar binding parameter definitions
+        """
+        config = get_binding_model_config(binding_model)
+        return config.scalar_parameters
+    
+    def get_component_binding_parameters(self, binding_model: str) -> list[ParameterDef]:
+        """Get per-component binding parameters from JSON config.
+        
+        Parameters
+        ----------
+        binding_model : str
+            Name of the binding model
+            
+        Returns
+        -------
+        list[ParameterDef]
+            Per-component binding parameter definitions
+        """
+        config = get_binding_model_config(binding_model)
+        return config.component_parameters
+    
     def validate_config(
         self,
         experiment: ExperimentConfig,
         column_binding: ColumnBindingConfig,
     ) -> list[str]:
         """Validate the configuration and return any errors.
-        
-        Attempts to build the process and checks configuration.
         
         Parameters
         ----------
@@ -265,8 +212,6 @@ class BaseOperationMode(ABC):
             
             # Use CADET-Process check_config
             if not process.check_config():
-                # TODO check_config prints warnings, catpure them
-                # For now, add a generic message
                 errors.append("Process configuration check failed. Check parameter values.")
                 
         except Exception as e:
@@ -274,59 +219,94 @@ class BaseOperationMode(ABC):
         
         return errors
     
-    # Introspection helpers
+    # -------------------------------------------------------------------------
+    # Helper methods for process creation
+    # -------------------------------------------------------------------------
     
-    def _get_model_class(self, class_path: str) -> type:
-        """Import and return class from dotted path."""
-        from importlib import import_module
-        module_path, class_name = class_path.rsplit('.', 1)
-        module = import_module(module_path)
-        return getattr(module, class_name)
-    
-    def _convert_to_parameter_definition(self, param_info: "ParameterInfo") -> ParameterDefinition:
-        """Convert ParameterInfo from introspection to ParameterDefinition."""
-        from .parameter_introspection import ParameterCategory
+    def _create_binding_model(
+        self,
+        binding_model_name: str,
+        component_system,
+        scalar_params: dict[str, Any],
+        component_params: dict[str, list[Any]],
+    ):
+        """Create and configure binding model.
         
-        # Map category to param_type
-        if param_info.category in (ParameterCategory.PER_COMPONENT, ParameterCategory.PER_BOUND_STATE):
-            param_type = ParameterType.PER_COMPONENT
-        else:
-            param_type = ParameterType.SCALAR
+        Parameters
+        ----------
+        binding_model_name : str
+            Name of the binding model
+        component_system : ComponentSystem
+            CADET-Process component system
+        scalar_params : dict[str, Any]
+            Scalar parameter values
+        component_params : dict[str, list[Any]]
+            Per-component parameter values (lists)
+            
+        Returns
+        -------
+        BindingModel
+            Configured binding model instance
+        """
+        config = get_binding_model_config(binding_model_name)
+        model_class = get_model_class(config.cadet_class)
         
-        return ParameterDefinition(
-            name=param_info.name,
-            display_name=param_info.display_name,
-            unit=param_info.unit or '-',
-            description=param_info.description or f'Parameter: {param_info.name}',
-            default=param_info.default,
-            param_type=param_type,
-            required=param_info.required,
-            bounds=param_info.bounds,
-        )
+        binding_model = model_class(component_system, name="binding")
+        
+        # Set scalar parameters
+        for param, value in scalar_params.items():
+            if hasattr(binding_model, param) and value is not None:
+                setattr(binding_model, param, value)
+        
+        # Set per-component parameters
+        for param, values in component_params.items():
+            if hasattr(binding_model, param) and values:
+                setattr(binding_model, param, values)
+        
+        return binding_model
     
-    def _introspect_column_parameters(self, column_model: str) -> list[ParameterDefinition]:
-        """Introspect column model for scalar parameters."""
-        from .parameter_introspection import get_column_model_parameters
-        scalar_params, _ = get_column_model_parameters(column_model, n_comp=2)
-        return [self._convert_to_parameter_definition(p) for p in scalar_params]
-    
-    def _introspect_component_column_parameters(self, column_model: str) -> list[ParameterDefinition]:
-        """Introspect column model for per-component parameters."""
-        from .parameter_introspection import get_column_model_parameters
-        _, per_comp_params = get_column_model_parameters(column_model, n_comp=2)
-        return [self._convert_to_parameter_definition(p) for p in per_comp_params]
-
-    def _introspect_binding_parameters(self, binding_model: str) -> list[ParameterDefinition]:
-        """Introspect binding model for scalar parameters."""
-        from .parameter_introspection import get_binding_model_parameters
-        scalar_params, _ = get_binding_model_parameters(binding_model, n_comp=2)
-        return [self._convert_to_parameter_definition(p) for p in scalar_params]
-    
-    def _introspect_component_binding_parameters(self, binding_model: str) -> list[ParameterDefinition]:
-        """Introspect binding model for per-component parameters."""
-        from .parameter_introspection import get_binding_model_parameters
-        _, per_comp_params = get_binding_model_parameters(binding_model, n_comp=2)
-        return [self._convert_to_parameter_definition(p) for p in per_comp_params]
-
-    
- 
+    def _create_column(
+        self,
+        column_model_name: str,
+        component_system,
+        binding_model,
+        scalar_params: dict[str, Any],
+        component_params: dict[str, list[Any]],
+    ):
+        """Create and configure column.
+        
+        Parameters
+        ----------
+        column_model_name : str
+            Name of the column model
+        component_system : ComponentSystem
+            CADET-Process component system
+        binding_model : BindingModel
+            Configured binding model
+        scalar_params : dict[str, Any]
+            Scalar parameter values
+        component_params : dict[str, list[Any]]
+            Per-component parameter values (lists)
+            
+        Returns
+        -------
+        Column
+            Configured column instance
+        """
+        config = get_column_model_config(column_model_name)
+        model_class = get_model_class(config.cadet_class)
+        
+        column = model_class(component_system, name="column")
+        column.binding_model = binding_model
+        
+        # Set scalar parameters
+        for param, value in scalar_params.items():
+            if hasattr(column, param) and value is not None:
+                setattr(column, param, value)
+        
+        # Set per-component parameters
+        for param, values in component_params.items():
+            if hasattr(column, param) and values:
+                setattr(column, param, values)
+        
+        return column

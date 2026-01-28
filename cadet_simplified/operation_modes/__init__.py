@@ -2,38 +2,21 @@
 
 Each operation mode defines a specific chromatography process type
 and how to convert user-friendly Excel parameters to CADET Process objects.
+
+Example:
+    >>> from cadet_simplified.operation_modes import get_operation_mode
+    >>> mode = get_operation_mode("LWE_concentration_based")
+    >>> process = mode.create_process(experiment_config, column_binding_config)
 """
 
-from .base import (
-    BaseOperationMode,
-    ParameterDefinition,
-    ParameterType,
-    ExperimentConfig,
-    ColumnBindingConfig,
-    ComponentDefinition,
-    ModelRegistry,
-    SUPPORTED_COLUMN_MODELS,
-    SUPPORTED_BINDING_MODELS,
-)
-from .lwe import LWEConcentrationBased, get_lwe_mode
-from .parameter_introspection import (
-    ParameterInfo,
-    ParameterCategory,
-    extract_model_parameters,
-    extract_parameter_info,
-    get_binding_model_parameters,
-    get_column_model_parameters,
-    get_available_binding_models,
-    get_available_column_models,
-    parameter_info_to_dict,
-    print_parameter_summary,
-)
+from .base import BaseOperationMode
+from .lwe import LWEConcentrationBased
 
 # Registry of available operation modes
-OPERATION_MODES = {
-    'LWE_concentration_based': LWEConcentrationBased,
+OPERATION_MODES: dict[str, type[BaseOperationMode]] = {
+    "LWE_concentration_based": LWEConcentrationBased,
 }
-OPERATION_MODES = ModelRegistry(OPERATION_MODES)
+
 
 def get_operation_mode(name: str) -> BaseOperationMode:
     """Get an operation mode instance by name.
@@ -47,37 +30,27 @@ def get_operation_mode(name: str) -> BaseOperationMode:
     -------
     BaseOperationMode
         Instance of the operation mode
+        
+    Raises
+    ------
+    ValueError
+        If operation mode not found
     """
     if name not in OPERATION_MODES:
-        raise ValueError(f"Unknown operation mode: {name}. Available: {list(OPERATION_MODES.keys())}")
+        available = list(OPERATION_MODES.keys())
+        raise ValueError(f"Unknown operation mode: {name}. Available: {available}")
     return OPERATION_MODES[name]()
 
 
+def list_operation_modes() -> list[str]:
+    """List available operation modes."""
+    return list(OPERATION_MODES.keys())
+
+
 __all__ = [
-    # Base classes
-    'BaseOperationMode',
-    'ParameterDefinition',
-    'ParameterType',
-    'ExperimentConfig',
-    'ColumnBindingConfig',
-    'ComponentDefinition',
-    # Registries
-    'SUPPORTED_COLUMN_MODELS',
-    'SUPPORTED_BINDING_MODELS',
-    'OPERATION_MODES',
-    # Implementations
-    'LWEConcentrationBased',
-    'get_lwe_mode',
-    'get_operation_mode',
-    # Parameter introspection
-    'ParameterInfo',
-    'ParameterCategory',
-    'extract_model_parameters',
-    'extract_parameter_info',
-    'get_binding_model_parameters',
-    'get_column_model_parameters',
-    'get_available_binding_models',
-    'get_available_column_models',
-    'parameter_info_to_dict',
-    'print_parameter_summary',
+    "BaseOperationMode",
+    "LWEConcentrationBased",
+    "OPERATION_MODES",
+    "get_operation_mode",
+    "list_operation_modes",
 ]

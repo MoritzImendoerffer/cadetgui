@@ -1,0 +1,64 @@
+{
+  "name": "BiLangmuir",
+  "cadet_class": "CADETProcess.processModel.BiLangmuir",
+  "description": "Bi-Langmuir isotherm with two types of binding sites",
+  "scalar_parameters": [
+    {
+      "name": "is_kinetic",
+      "type": "bool",
+      "default": true,
+      "unit": "-",
+      "description": "Use kinetic binding (true) or rapid equilibrium (false)"
+    }
+  ],
+  "component_parameters": [
+    {
+      "name": "adsorption_rate",
+      "type": "float",
+      "default": null,
+      "unit": "1/(mM·s)",
+      "bounds": [0, null],
+      "description": "Adsorption rate constant for site type 1"
+    },
+    {
+      "name": "desorption_rate",
+      "type": "float",
+      "default": null,
+      "unit": "1/s",
+      "bounds": [0, null],
+      "description": "Desorption rate constant for site type 1"
+    },
+    {
+      "name": "capacity",
+      "type": "float",
+      "default": null,
+      "unit": "mM",
+      "bounds": [0, null],
+      "description": "Maximum binding capacity for site type 1"
+    },
+    {
+      "name": "adsorption_rate2",
+      "type": "float",
+      "default": null,
+      "unit": "1/(mM·s)",
+      "bounds": [0, null],
+      "description": "Adsorption rate constant for site type 2"
+    },
+    {
+      "name": "desorption_rate2",
+      "type": "float",
+      "default": null,
+      "unit": "1/s",
+      "bounds": [0, null],
+      "description": "Desorption rate constant for site type 2"
+    },
+    {
+      "name": "capacity2",
+      "type": "float",
+      "default": null,
+      "unit": "mM",
+      "bounds": [0, null],
+      "description": "Maximum binding capacity for site type 2"
+    }
+  ]
+}

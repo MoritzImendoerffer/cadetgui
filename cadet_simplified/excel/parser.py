@@ -1,7 +1,12 @@
 """Excel parser for filled experiment templates.
 
-Parses Excel files uploaded by users and converts them to
-ExperimentConfig and ColumnBindingConfig objects.
+Parses Excel files and converts them to ExperimentConfig and ColumnBindingConfig.
+
+Example:
+    >>> result = parse_excel("filled_template.xlsx")
+    >>> if result.success:
+    ...     for exp in result.experiments:
+    ...         process = mode.create_process(exp, result.column_binding)
 """
 
 from dataclasses import dataclass, field
@@ -11,16 +16,26 @@ import re
 
 import pandas as pd
 
-from ..operation_modes import (
-    ExperimentConfig,
-    ColumnBindingConfig,
-    ComponentDefinition,
-)
+from ..core import ExperimentConfig, ColumnBindingConfig, ComponentDefinition
 
 
 @dataclass
 class ParseResult:
-    """Result of parsing an Excel template."""
+    """Result of parsing an Excel template.
+    
+    Attributes
+    ----------
+    success : bool
+        Whether parsing succeeded
+    experiments : list[ExperimentConfig]
+        Parsed experiment configurations
+    column_binding : ColumnBindingConfig, optional
+        Parsed column/binding configuration
+    errors : list[str]
+        Error messages
+    warnings : list[str]
+        Warning messages
+    """
     success: bool
     experiments: list[ExperimentConfig] = field(default_factory=list)
     column_binding: ColumnBindingConfig | None = None
@@ -45,7 +60,7 @@ class ExcelParser:
         Parameters
         ----------
         file : str, Path, or file-like
-            Path to Excel file or file-like object
+            Excel file to parse
             
         Returns
         -------
@@ -56,7 +71,6 @@ class ExcelParser:
         warnings = []
         
         try:
-            # Read Excel file
             excel_file = pd.ExcelFile(file)
             sheet_names = excel_file.sheet_names
             
@@ -69,8 +83,7 @@ class ExcelParser:
             if errors:
                 return ParseResult(success=False, errors=errors)
             
-            # Parse Column_Binding sheet first (needed for component info)
-            # Read with dtype=str to prevent automatic type conversion issues
+            # Parse Column_Binding sheet first
             column_binding, cb_errors, cb_warnings = self._parse_column_binding(
                 excel_file.parse("Column_Binding", dtype=str)
             )
@@ -125,29 +138,15 @@ class ExcelParser:
             if not param or param.startswith("#"):
                 continue
             
-            # Handle NaN/None/empty values
             if pd.isna(value) or value is None:
                 continue
             
-            # Convert value to string first, then to appropriate type
             value = str(value).strip()
             if value == "" or value.lower() == "nan":
                 continue
             
             # Convert to appropriate type
-            if value.lower() == "true":
-                value = True
-            elif value.lower() == "false":
-                value = False
-            else:
-                # Try numeric conversion - returns NaN if not a number
-                numeric = pd.to_numeric(value, errors='coerce')
-                if pd.notna(numeric):
-                    # Preserve int vs float
-                    value = int(numeric) if numeric == int(numeric) else float(numeric)
-                # else: keep as string
-            
-            params[param] = value
+            params[param] = self._convert_value(value)
         
         # Extract model selection
         column_model = params.get("column_model")
@@ -172,26 +171,30 @@ class ExcelParser:
             name = params.get(f"component_{i}_name", f"Component_{i}")
             component_names.append(str(name))
         
-        # Separate scalar and per-component parameters
+        # Separate parameters into categories
         column_params = {}
         binding_params = {}
         component_column_params = {}
         component_binding_params = {}
         
-        # Known scalar column parameters
-        scalar_column_names = {
-            "length", "diameter", "bed_porosity", "particle_porosity",
-            "particle_radius", "axial_dispersion", "total_porosity",
-        }
-        
-        # Known scalar binding parameters
-        scalar_binding_names = {
-            "capacity", "is_kinetic", "reference_liquid_phase_conc",
-            "reference_solid_phase_conc",
-        }
-        
-        # Pattern for per-component parameters: param_name_component_N
+        # Pattern for per-component parameters
         component_pattern = re.compile(r"^(.+)_component_(\d+)$")
+        
+        # Known column scalar parameters (from common JSON configs)
+        column_scalar_names = {
+            "length", "diameter", "bed_porosity", "particle_porosity",
+            "particle_radius", "axial_dispersion", "flow_direction",
+        }
+        
+        # Known binding scalar parameters
+        binding_scalar_names = {
+            "is_kinetic", "reference_liquid_phase_conc", "reference_solid_phase_conc",
+        }
+        
+        # Known column component parameters
+        column_component_names = {
+            "film_diffusion", "pore_diffusion", "surface_diffusion", "pore_accessibility",
+        }
         
         for param, value in params.items():
             # Skip model selection params
@@ -204,10 +207,10 @@ class ExcelParser:
             match = component_pattern.match(param)
             if match:
                 base_name = match.group(1)
-                comp_idx = int(match.group(2)) - 1  # Convert to 0-based
+                comp_idx = int(match.group(2)) - 1
                 
                 # Determine if column or binding parameter
-                if base_name in scalar_column_names or base_name in self._get_known_column_params():
+                if base_name in column_component_names or base_name in column_scalar_names:
                     if base_name not in component_column_params:
                         component_column_params[base_name] = [None] * n_components
                     if 0 <= comp_idx < n_components:
@@ -219,27 +222,16 @@ class ExcelParser:
                         component_binding_params[base_name][comp_idx] = value
             else:
                 # Scalar parameter
-                if param in scalar_column_names:
+                if param in column_scalar_names:
                     column_params[param] = value
-                elif param in scalar_binding_names:
+                elif param in binding_scalar_names:
                     binding_params[param] = value
                 else:
-                    # Try to guess based on common names
-                    if any(kw in param.lower() for kw in ["porosity", "length", "diameter", "dispersion", "diffusion"]):
+                    # Guess based on name
+                    if any(kw in param.lower() for kw in ["porosity", "length", "diameter", "dispersion", "diffusion", "radius"]):
                         column_params[param] = value
                     else:
                         binding_params[param] = value
-        
-        # Validate per-component arrays have no None values
-        for param, values in component_column_params.items():
-            if any(v is None for v in values):
-                missing = [i+1 for i, v in enumerate(values) if v is None]
-                warnings.append(f"Missing {param} for components: {missing}")
-        
-        for param, values in component_binding_params.items():
-            if any(v is None for v in values):
-                missing = [i+1 for i, v in enumerate(values) if v is None]
-                warnings.append(f"Missing {param} for components: {missing}")
         
         # Replace None with 0.0 in component arrays
         for param in component_column_params:
@@ -260,7 +252,7 @@ class ExcelParser:
             component_binding_parameters=component_binding_params,
         )
         
-        # Store component names for later use
+        # Store component names for experiments parsing
         config._component_names = component_names
         
         return config, errors, warnings
@@ -275,11 +267,10 @@ class ExcelParser:
         warnings = []
         experiments = []
         
-        # Get component names from column_binding
         component_names = getattr(column_binding, '_component_names', [])
         n_components = len(component_names)
         
-        # Skip the units row (first row if it contains [unit])
+        # Skip units row (first row if it contains [unit])
         start_row = 0
         if len(df) > 0:
             first_row = df.iloc[0]
@@ -290,17 +281,14 @@ class ExcelParser:
         for idx in range(start_row, len(df)):
             row = df.iloc[idx]
             
-            # Get experiment name
             exp_name = row.get("experiment_name")
             if pd.isna(exp_name) or str(exp_name).strip() == "":
-                continue  # Skip empty rows
+                continue
             
             exp_name = str(exp_name).strip()
             
-            # Extract all parameters
+            # Extract parameters
             params = {}
-            row_errors = []
-            
             for col in df.columns:
                 if col == "experiment_name":
                     continue
@@ -309,35 +297,21 @@ class ExcelParser:
                 if pd.isna(value) or value is None:
                     continue
                 
-                # Convert value to string first
                 value = str(value).strip()
-                if value.startswith("["):  # Skip unit annotations
-                    continue
-                if value == "" or value.lower() == "nan":
+                if value.startswith("[") or value == "" or value.lower() == "nan":
                     continue
                 
-                # Convert to appropriate type
-                if value.lower() == "true":
-                    value = True
-                elif value.lower() == "false":
-                    value = False
-                else:
-                    # Try numeric conversion
-                    numeric = pd.to_numeric(value, errors='coerce')
-                    if pd.notna(numeric):
-                        value = int(numeric) if numeric == int(numeric) else float(numeric)
-                
-                params[col] = value
+                params[col] = self._convert_value(value)
             
             # Build component definitions
             components = []
             for i in range(n_components):
-                comp_name = params.get(f"component_{i+1}_name", component_names[i] if i < len(component_names) else f"Component_{i+1}")
-                is_salt = (i == 0)  # First component is always salt
+                comp_name = params.get(
+                    f"component_{i+1}_name",
+                    component_names[i] if i < len(component_names) else f"Component_{i+1}"
+                )
+                is_salt = (i == 0)
                 components.append(ComponentDefinition(name=str(comp_name), is_salt=is_salt))
-            
-            if row_errors:
-                errors.extend([f"Experiment '{exp_name}': {e}" for e in row_errors])
             
             experiments.append(ExperimentConfig(
                 name=exp_name,
@@ -350,12 +324,17 @@ class ExcelParser:
         
         return experiments, errors, warnings
     
-    def _get_known_column_params(self) -> set[str]:
-        """Get known column parameter names."""
-        return {
-            "film_diffusion", "pore_diffusion", "surface_diffusion",
-            "pore_accessibility",
-        }
+    def _convert_value(self, value: str) -> Any:
+        """Convert string value to appropriate type."""
+        if value.lower() == "true":
+            return True
+        elif value.lower() == "false":
+            return False
+        else:
+            numeric = pd.to_numeric(value, errors='coerce')
+            if pd.notna(numeric):
+                return int(numeric) if numeric == int(numeric) else float(numeric)
+            return value
 
 
 def parse_excel(file: str | Path | BinaryIO) -> ParseResult:

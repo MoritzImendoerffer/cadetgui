@@ -2,31 +2,24 @@
 
 This operation mode uses a single inlet with concentration switching/gradients,
 similar to how real chromatography systems work.
+
+Example:
+    >>> from cadet_simplified.operation_modes import get_operation_mode
+    >>> from cadet_simplified.core import ExperimentConfig, ColumnBindingConfig
+    >>> 
+    >>> mode = get_operation_mode("LWE_concentration_based")
+    >>> process = mode.create_process(experiment_config, column_binding_config)
 """
 
 from typing import Any, TYPE_CHECKING
+
 import numpy as np
 
-# Lazy imports for CADET-Process (only needed when creating processes)
 if TYPE_CHECKING:
-    from CADETProcess.processModel import (
-        ComponentSystem,
-        FlowSheet,
-        Inlet,
-        Outlet,
-        Process,
-    )
+    from CADETProcess.processModel import Process
 
-from .base import (
-    BaseOperationMode,
-    ParameterDefinition,
-    ParameterType,
-    ExperimentConfig,
-    ColumnBindingConfig,
-    ComponentDefinition,
-    SUPPORTED_COLUMN_MODELS,
-    SUPPORTED_BINDING_MODELS,
-)
+from .base import BaseOperationMode, ProcessParameterDef
+from ..core import ExperimentConfig, ColumnBindingConfig
 
 
 class LWEConcentrationBased(BaseOperationMode):
@@ -40,27 +33,27 @@ class LWEConcentrationBased(BaseOperationMode):
     - Strip (optional): High salt strip to clean column
     
     All volumes are specified in Column Volumes (CV) for lab convenience.
-    Flow rate is specified in CV/min.
+    Flow rate is specified in mL/min.
     Salt concentrations in mM.
     """
     
     name = "LWE_concentration_based"
     description = "Load-Wash-Elute with linear salt gradient elution"
     
-    def get_experiment_parameters(self) -> list[ParameterDefinition]:
+    def get_experiment_parameters(self) -> list[ProcessParameterDef]:
         """Get experiment parameters in lab-friendly units."""
         return [
             # Flow
-            ParameterDefinition(
+            ProcessParameterDef(
                 name="flow_rate_mL_min",
                 display_name="Flow Rate",
                 unit="mL/min",
-                description="Volumetric flow rate in mL per minute",
+                description="Volumetric flow rate",
                 default=1.0,
                 bounds=(0.01, 10.0),
             ),
             # Volumes (all in CV)
-            ParameterDefinition(
+            ProcessParameterDef(
                 name="equilibration_cv",
                 display_name="Equilibration Volume",
                 unit="CV",
@@ -69,7 +62,7 @@ class LWEConcentrationBased(BaseOperationMode):
                 required=False,
                 bounds=(0.0, 50.0),
             ),
-            ParameterDefinition(
+            ProcessParameterDef(
                 name="load_cv",
                 display_name="Load Volume",
                 unit="CV",
@@ -77,7 +70,7 @@ class LWEConcentrationBased(BaseOperationMode):
                 default=5.0,
                 bounds=(0.1, 100.0),
             ),
-            ParameterDefinition(
+            ProcessParameterDef(
                 name="wash_cv",
                 display_name="Wash Volume",
                 unit="CV",
@@ -85,7 +78,7 @@ class LWEConcentrationBased(BaseOperationMode):
                 default=5.0,
                 bounds=(0.0, 50.0),
             ),
-            ParameterDefinition(
+            ProcessParameterDef(
                 name="elution_cv",
                 display_name="Elution Volume",
                 unit="CV",
@@ -93,7 +86,7 @@ class LWEConcentrationBased(BaseOperationMode):
                 default=20.0,
                 bounds=(1.0, 100.0),
             ),
-            ParameterDefinition(
+            ProcessParameterDef(
                 name="strip_cv",
                 display_name="Strip Volume",
                 unit="CV",
@@ -103,7 +96,7 @@ class LWEConcentrationBased(BaseOperationMode):
                 bounds=(0.0, 20.0),
             ),
             # Salt concentrations
-            ParameterDefinition(
+            ProcessParameterDef(
                 name="load_salt_mM",
                 display_name="Load Salt",
                 unit="mM",
@@ -111,7 +104,7 @@ class LWEConcentrationBased(BaseOperationMode):
                 default=50.0,
                 bounds=(0.0, 2000.0),
             ),
-            ParameterDefinition(
+            ProcessParameterDef(
                 name="wash_salt_mM",
                 display_name="Wash Salt",
                 unit="mM",
@@ -119,7 +112,7 @@ class LWEConcentrationBased(BaseOperationMode):
                 default=50.0,
                 bounds=(0.0, 2000.0),
             ),
-            ParameterDefinition(
+            ProcessParameterDef(
                 name="gradient_start_mM",
                 display_name="Gradient Start",
                 unit="mM",
@@ -127,7 +120,7 @@ class LWEConcentrationBased(BaseOperationMode):
                 default=50.0,
                 bounds=(0.0, 2000.0),
             ),
-            ParameterDefinition(
+            ProcessParameterDef(
                 name="gradient_end_mM",
                 display_name="Gradient End",
                 unit="mM",
@@ -135,7 +128,7 @@ class LWEConcentrationBased(BaseOperationMode):
                 default=500.0,
                 bounds=(0.0, 2000.0),
             ),
-            ParameterDefinition(
+            ProcessParameterDef(
                 name="strip_salt_mM",
                 display_name="Strip Salt",
                 unit="mM",
@@ -144,8 +137,8 @@ class LWEConcentrationBased(BaseOperationMode):
                 required=False,
                 bounds=(0.0, 2000.0),
             ),
-            # pH (optional, for record keeping / future GIEX support)
-            ParameterDefinition(
+            # pH (optional)
+            ProcessParameterDef(
                 name="ph",
                 display_name="pH",
                 unit="-",
@@ -156,16 +149,16 @@ class LWEConcentrationBased(BaseOperationMode):
             ),
         ]
     
-    def get_component_experiment_parameters(self) -> list[ParameterDefinition]:
+    def get_component_experiment_parameters(self) -> list[ProcessParameterDef]:
         """Get per-component experiment parameters."""
         return [
-            ParameterDefinition(
+            ProcessParameterDef(
                 name="load_concentration",
                 display_name="Load Concentration",
                 unit="g/L",
                 description="Concentration in the load (feed)",
                 default=1.0,
-                param_type=ParameterType.PER_COMPONENT,
+                per_component=True,
                 bounds=(0.0, 100.0),
             ),
         ]
@@ -175,10 +168,7 @@ class LWEConcentrationBased(BaseOperationMode):
         experiment: ExperimentConfig,
         column_binding: ColumnBindingConfig,
     ) -> "Process":
-        """Create a CADET Process from the configuration.
-        
-        Converts lab-friendly units to SI and builds the process.
-        """
+        """Create a CADET Process from the configuration."""
         # Lazy imports for CADET-Process
         from CADETProcess.processModel import (
             ComponentSystem,
@@ -215,51 +205,40 @@ class LWEConcentrationBased(BaseOperationMode):
         )
         
         # Calculate column volume (in m3)
-        column_volume_m3 = column.volume  # CADET-Process calculates this
-        column_volume_ml = column_volume_m3 * 1e6  # Convert to mL
+        column_volume_m3 = column.volume
+        column_volume_ml = column_volume_m3 * 1e6
         
-        # Convert flow rate: CV/min -> m3/s
+        # Convert flow rate: mL/min -> m3/s
         flow_rate_ml_min = params["flow_rate_mL_min"]
-        flow_rate_m3_s = flow_rate_ml_min / 1e6 / 60.0  # mL/min -> m3/s
+        flow_rate_m3_s = flow_rate_ml_min / 1e6 / 60.0
         flow_rate_cv_min = flow_rate_ml_min / column_volume_ml
         
-        # Convert volumes: CV -> seconds (duration = volume / flow_rate)
+        # Convert volumes: CV -> seconds
         def cv_to_seconds(cv: float) -> float:
             if cv <= 0:
                 return 0.0
-            return cv / flow_rate_cv_min * 60.0  # CV / (CV/min) * 60 s/min
+            return cv / flow_rate_cv_min * 60.0
         
-        equilibration_duration = cv_to_seconds(params["equilibration_cv"])
+        equilibration_duration = cv_to_seconds(params.get("equilibration_cv", 0))
         load_duration = cv_to_seconds(params["load_cv"])
         wash_duration = cv_to_seconds(params["wash_cv"])
         elution_duration = cv_to_seconds(params["elution_cv"])
-        strip_duration = cv_to_seconds(params["strip_cv"])
-        if np.allclose(strip_duration, 0):
-            strip_duration = 1 # strip duration should not be 0 for the events to work properly
-        # Salt concentrations (already in mM == M/m3 which CADET uses)
+        strip_duration = cv_to_seconds(params.get("strip_cv", 0))
+        
+        # Salt concentrations
         load_salt = params["load_salt_mM"]
         wash_salt = params["wash_salt_mM"]
         gradient_end = params["gradient_end_mM"]
-        strip_salt = params["strip_salt_mM"]
-        
-        # Build concentration arrays for each phase
-        # Component 0 is salt, others are proteins
+        strip_salt = params.get("strip_salt_mM", 1000.0)
         
         # Get load concentrations for each component
         load_concs = self._get_component_concentrations(params, components)
         
-        # Equilibration: salt at load level, proteins at 0
+        # Build concentration arrays for each phase
         c_equilibration = [load_salt] + [0.0] * (n_comp - 1)
-        
-        # Load: salt at load level, proteins at their concentrations
-        c_load = [load_salt] + load_concs[1:]  # Skip salt in load_concs
-        
-        # Wash: salt at wash level, proteins at 0
+        c_load = [load_salt] + load_concs[1:]
         c_wash = [wash_salt] + [0.0] * (n_comp - 1)
-        
         c_elution = [gradient_end] + [0.0] * (n_comp - 1)
-        
-        # Strip: high salt, no proteins
         c_strip = [strip_salt] + [0.0] * (n_comp - 1)
         
         # Set initial column conditions
@@ -267,7 +246,6 @@ class LWEConcentrationBased(BaseOperationMode):
         if hasattr(column, 'cp'):
             column.cp = c_equilibration
         if hasattr(column, 'q') and hasattr(binding_model, 'capacity'):
-            # Salt occupies all binding sites initially
             capacity = binding_model.capacity if hasattr(binding_model, 'capacity') else 0.0
             column.q = [capacity] + [0.0] * (n_comp - 1)
         
@@ -287,57 +265,49 @@ class LWEConcentrationBased(BaseOperationMode):
         )
         process.cycle_time = cycle_time
         
+        # Event times
         event_times = {
-            "Equilibration_start": 0,
-            'Load_start': equilibration_duration,
-            'Wash_start': equilibration_duration + load_duration,
-            'Elution_start': equilibration_duration + load_duration + wash_duration,
-            'Elution_stop': equilibration_duration + load_duration + wash_duration + elution_duration
+            'Load': equilibration_duration,
+            'Wash': equilibration_duration + load_duration,
+            'Elution': equilibration_duration + load_duration + wash_duration,
+            'Strip': equilibration_duration + load_duration + wash_duration + elution_duration,
         }
         
+        # Gradient slope
         gradient_slope = (np.array(c_elution) - np.array(c_wash)) / elution_duration
         c_gradient_poly = np.array(list(zip(c_wash, gradient_slope)))
-        # Set up inlet with constant flow rate
+        
+        # Set up inlet
         inlet = flow_sheet.inlet
         inlet.flow_rate = flow_rate_m3_s
         
-        process.add_event('Equilibration', 'flow_sheet.inlet.c', c_equilibration)
-        process.add_event('Load', 'flow_sheet.inlet.c', c_load, time=event_times['Load_start'])
-        process.add_event('Wash', 'flow_sheet.inlet.c', c_wash, time=event_times['Wash_start'])
-        process.add_event('ELution start', 'flow_sheet.inlet.c', c_gradient_poly, event_times['Elution_start'])
-        process.add_event('Elution stop', 'flow_sheet.inlet.c', c_elution, time=event_times["Elution_stop"])
+        # Add events
+        process.add_event('Load', 'flow_sheet.inlet.c', c_load, time=event_times['Load'])
+        process.add_event('Wash', 'flow_sheet.inlet.c', c_wash, time=event_times['Wash'])
+        process.add_event('grad_start', 'flow_sheet.inlet.c', c_gradient_poly, event_times['Elution'])
+        process.add_event('grad_stop', 'flow_sheet.inlet.c', c_elution, time=event_times['Strip'])
         
         return process
     
     def _get_component_concentrations(
         self,
         params: dict[str, Any],
-        components: list[ComponentDefinition],
+        components: list,
     ) -> list[float]:
-        """Extract load concentrations for each component from params.
-        
-        Looks for parameters like 'component_1_load_concentration'.
-        """
+        """Extract load concentrations for each component."""
         concentrations = []
         
         for i, comp in enumerate(components):
-            # Salt component has concentration defined by load_salt_mM
-            # TODO: remove hardcoding
             if comp.is_salt or i == 0:
                 concentrations.append(params["load_salt_mM"])
             else:
-                # Look for component-specific concentration
                 key = f"component_{i+1}_load_concentration"
-                conc = params[key]
+                conc = params.get(key, 1.0)
                 concentrations.append(conc)
         
         return concentrations
     
-    def _build_flow_sheet(
-        self,
-        column,
-        component_system: "ComponentSystem",
-    ) -> "FlowSheet":
+    def _build_flow_sheet(self, column, component_system) -> "FlowSheet":
         """Build the flow sheet with single inlet."""
         from CADETProcess.processModel import FlowSheet, Inlet, Outlet
         
@@ -353,62 +323,3 @@ class LWEConcentrationBased(BaseOperationMode):
         flow_sheet.add_connection(column, outlet)
         
         return flow_sheet
-    
-    def _create_binding_model(
-        self,
-        binding_model_name: str,
-        component_system: "ComponentSystem",
-        scalar_params: dict[str, Any],
-        component_params: dict[str, list[Any]],
-    ):
-        """Create and configure binding model."""
-        class_path = SUPPORTED_BINDING_MODELS[binding_model_name]
-        model_class = self._get_model_class(class_path)
-        
-        binding_model = model_class(component_system, name="binding")
-        
-        # Set scalar parameters
-        for param, value in scalar_params.items():
-            if hasattr(binding_model, param) and value is not None:
-                setattr(binding_model, param, value)
-        
-        # Set per-component parameters
-        for param, values in component_params.items():
-            if hasattr(binding_model, param) and values:
-                setattr(binding_model, param, values)
-        
-        return binding_model
-    
-    def _create_column(
-        self,
-        column_model_name: str,
-        component_system: "ComponentSystem",
-        binding_model,
-        scalar_params: dict[str, Any],
-        component_params: dict[str, list[Any]],
-    ):
-        """Create and configure column."""
-        class_path = SUPPORTED_COLUMN_MODELS[column_model_name]
-        model_class = self._get_model_class(class_path)
-        
-        column = model_class(component_system, name="column")
-        column.binding_model = binding_model
-        
-        # set all scalar values
-        for name, value in scalar_params.items():
-            if not hasattr(column, name):
-                raise ValueError(f"Parameter {name} not in {column.parameters.keys()} for {column}")
-            setattr(column, name, value)
-        
-        # Set per-component parameters
-        for param, values in component_params.items():
-            if hasattr(column, param) and values:
-                setattr(column, param, values)
-        
-        return column
-
-
-# Convenience function to get the operation mode
-def get_lwe_mode() -> LWEConcentrationBased:
-    """Get an instance of the LWE operation mode."""
-    return LWEConcentrationBased()

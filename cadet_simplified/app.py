@@ -7,100 +7,35 @@ A streamlined interface with Excel-based configuration:
 4. Validate and simulate
 5. Browse saved experiments
 6. Analyse selected experiments
+
+Run with:
+    panel serve app.py --show --autoreload
+    
+Or programmatically:
+    from cadet_simplified.app import serve
+    serve(port=5006)
 """
 
 import io
-import os
 from pathlib import Path
-from typing import TYPE_CHECKING
+from datetime import datetime
 
 import panel as pn
 import param
 import pandas as pd
-import numpy as np
 
 pn.extension('tabulator', notifications=True)
 
-from .operation_modes import (
-    OPERATION_MODES,
-    SUPPORTED_COLUMN_MODELS,
-    SUPPORTED_BINDING_MODELS,
-    get_operation_mode,
+# Import from refactored modules
+from .configs import list_binding_models, list_column_models
+from .operation_modes import get_operation_mode, list_operation_modes
+from .excel import ExcelTemplateGenerator, parse_excel, ParseResult
+from .storage import FileStorage, LoadedExperiment
+from .simulation import SimulationRunner, SimulationResultWrapper, ValidationResult
+from .plotting import (
+    plot_chromatogram_from_df,
+    plot_chromatogram_overlay_from_df,
 )
-from .excel import ExcelTemplateGenerator, ExcelParser, ParseResult
-from .storage import FileResultsStorage, LoadedExperiment
-from .simulation import SimulationRunner, ValidationResult
-from .analysis import AnalysisView, get_analysis, list_analyses
-from .utils.path_utils import get_storage_path
-if TYPE_CHECKING:
-    from .operation_modes import ExperimentConfig, ColumnBindingConfig
-
-
-def _detect_cadet_path() -> tuple[str | None, str]:
-    """Try to detect CADET installation path.
-    
-    Detection order:
-    1. CADET-Process auto-detection
-    2. CADET_PATH environment variable
-    3. None (with error message)
-    
-    Returns
-    -------
-    tuple[str | None, str]
-        (detected_path, status_message)
-        - detected_path: Path string if found, None if not
-        - status_message: Description of detection result
-    """
-    # 1. Try CADET-Process auto-detection
-    try:
-        from CADETProcess.simulator import Cadet
-        simulator = Cadet()
-        simulator.check_cadet()
-        
-        if simulator.install_path:
-            cadet_path = Path(simulator.install_path)
-            if cadet_path.is_file():
-                path = str(cadet_path.parent)
-            elif cadet_path.is_dir():
-                path = str(cadet_path)
-            else:
-                path = str(simulator.install_path)
-            return path, "Auto-detected via CADET-Process"
-    except Exception:
-        pass
-    
-    # 2. Try environment variable
-    env_path = os.environ.get("CADET_PATH")
-    if env_path:
-        if Path(env_path).exists():
-            return env_path, "Loaded from CADET_PATH environment variable"
-        else:
-            # Environment variable set but path doesn't exist
-            return None, f"CADET_PATH environment variable set to '{env_path}' but path does not exist"
-    
-    # 3. Detection failed
-    return None, "CADET path not found"
-
-
-CADET_PATH_HELP = """
-### CADET Path Not Found
-
-CADET could not be auto-detected. Please either:
-
-**Option 1: Set environment variable (recommended)**
-```bash
-# Linux/Mac - add to ~/.bashrc or ~/.zshrc
-export CADET_PATH="/path/to/cadet/bin"
-
-# Windows - in Command Prompt
-set CADET_PATH=C:\\path\\to\\cadet\\bin
-```
-
-**Option 2: Enter the path manually below**
-
-The path should point to the directory containing the CADET executable 
-(e.g., `/home/user/miniconda3/envs/cadet/bin` or `C:\\cadet\\bin`).
-"""
 
 
 class SimplifiedCADETApp(param.Parameterized):
@@ -118,17 +53,17 @@ class SimplifiedCADETApp(param.Parameterized):
     # Configuration parameters
     operation_mode = param.Selector(
         default="LWE_concentration_based",
-        objects=list(OPERATION_MODES.keys()),
+        objects=list_operation_modes(),
         doc="Operation mode (process type)",
     )
     column_model = param.Selector(
         default="LumpedRateModelWithPores",
-        objects=list(SUPPORTED_COLUMN_MODELS.keys()),
+        objects=list_column_models(),
         doc="Column model",
     )
     binding_model = param.Selector(
         default="StericMassAction",
-        objects=list(SUPPORTED_BINDING_MODELS.keys()),
+        objects=list_binding_models(),
         doc="Binding model",
     )
     n_components = param.Integer(
@@ -142,30 +77,25 @@ class SimplifiedCADETApp(param.Parameterized):
     
     def __init__(
         self,
-        storage_dir: str | Path = None,
+        storage_dir: str | Path = "./experiments",
         cadet_path: str | None = None,
-        n_load_workers: int = 4,
         **params
     ):
         super().__init__(**params)
-        if not storage_dir:
-            storage_dir = get_storage_path()
         self.storage_dir = Path(storage_dir)
         self.cadet_path = cadet_path
-        self.n_load_workers = n_load_workers
         
         # Initialize storage and runner
-        self.storage = FileResultsStorage(self.storage_dir)
+        self.storage = FileStorage(self.storage_dir)
         self.runner = SimulationRunner(cadet_path)
         
         # State
         self._current_parse_result: ParseResult | None = None
-        self._simulation_results: list = []
+        self._simulation_results: list[SimulationResultWrapper] = []
         self._component_names: list[str] = self._default_component_names()
         
         # Analysis state
         self._loaded_experiments: list[LoadedExperiment] = []
-        self._analysis_view = AnalysisView()
         
         # Build UI components
         self._build_ui()
@@ -244,34 +174,6 @@ class SimplifiedCADETApp(param.Parameterized):
         )
         
         # === Tab 3: Simulate ===
-        # CADET path detection
-        if self.cadet_path:
-            # Path explicitly provided
-            detected_path = self.cadet_path
-            path_status = "Provided via configuration"
-            path_found = True
-        else:
-            # Try auto-detection
-            detected_path, path_status = _detect_cadet_path()
-            path_found = detected_path is not None
-        
-        self._cadet_path_input = pn.widgets.TextInput(
-            name="CADET Path",
-            value=detected_path or "",
-            placeholder="/path/to/cadet/bin",
-            width=500,
-        )
-        
-        self._cadet_path_status = pn.pane.Markdown(
-            f"*{path_status}*" if path_found else "",
-            sizing_mode='stretch_width',
-        )
-        
-        self._cadet_path_help = pn.pane.Markdown(
-            CADET_PATH_HELP if not path_found else "",
-            sizing_mode='stretch_width',
-        )
-        
         self._simulate_btn = pn.widgets.Button(
             name="Run Simulations",
             button_type="success",
@@ -291,13 +193,6 @@ class SimplifiedCADETApp(param.Parameterized):
         self._simulation_output = pn.Column(
             pn.pane.Markdown("*Validate configuration first, then run simulations*"),
             sizing_mode='stretch_width',
-        )
-        
-        # Quick results plot (for immediate feedback after simulation)
-        self._quick_results_plot = pn.pane.HoloViews(
-            None,
-            sizing_mode='stretch_width',
-            height=400,
         )
         
         # === Tab 4: Saved Experiments ===
@@ -337,11 +232,13 @@ class SimplifiedCADETApp(param.Parameterized):
         )
         
         # === Tab 5: Analysis ===
-        analysis_options = {a["description"]: a["name"] for a in list_analyses()}
         self._analysis_type_selector = pn.widgets.Select(
             name="Analysis Type",
-            options=analysis_options,
-            value=list(analysis_options.values())[0] if analysis_options else None,
+            options={
+                "Chromatogram Overlay": "overlay",
+                "Individual Chromatograms": "individual",
+            },
+            value="overlay",
             width=300,
         )
         
@@ -431,7 +328,7 @@ class SimplifiedCADETApp(param.Parameterized):
                 download_widget,
             ]
             
-            self.status = f"Template generated. Download and fill in your experiments."
+            self.status = "Template generated. Download and fill in your experiments."
             self._update_status("success")
             
         except Exception as e:
@@ -445,8 +342,7 @@ class SimplifiedCADETApp(param.Parameterized):
         
         try:
             file_bytes = io.BytesIO(event.new)
-            parser = ExcelParser()
-            result = parser.parse(file_bytes)
+            result = parse_excel(file_bytes)
             
             self._current_parse_result = result
             
@@ -521,21 +417,6 @@ class SimplifiedCADETApp(param.Parameterized):
         if self._current_parse_result is None:
             return
         
-        # Validate CADET path
-        cadet_path = self._cadet_path_input.value.strip()
-        if not cadet_path:
-            self.status = "Error: CADET path is required for validation. Please enter the path in the Simulate tab."
-            self._update_status("danger")
-            return
-        
-        if not Path(cadet_path).exists():
-            self.status = f"Error: CADET path does not exist: {cadet_path}"
-            self._update_status("danger")
-            return
-        
-        # Update runner with current CADET path
-        self.runner = SimulationRunner(cadet_path)
-        
         result = self._current_parse_result
         mode = get_operation_mode(self.operation_mode)
         
@@ -594,21 +475,6 @@ class SimplifiedCADETApp(param.Parameterized):
         if self._current_parse_result is None:
             return
         
-        # Validate CADET path
-        cadet_path = self._cadet_path_input.value.strip()
-        if not cadet_path:
-            self.status = "Error: CADET path is required. Please enter the path to your CADET installation."
-            self._update_status("danger")
-            return
-        
-        if not Path(cadet_path).exists():
-            self.status = f"Error: CADET path does not exist: {cadet_path}"
-            self._update_status("danger")
-            return
-        
-        # Update runner with current CADET path
-        self.runner = SimulationRunner(cadet_path)
-        
         result = self._current_parse_result
         mode = get_operation_mode(self.operation_mode)
         
@@ -619,9 +485,6 @@ class SimplifiedCADETApp(param.Parameterized):
         n_experiments = len(result.experiments)
         output_items = [pn.pane.Markdown("### Simulation Progress\n")]
         
-        # Use storage's pending directory for H5 files
-        h5_dir = self.storage.get_pending_dir()
-        
         for i, exp in enumerate(result.experiments):
             progress = int((i / n_experiments) * 100)
             self._simulation_progress.value = progress
@@ -630,7 +493,7 @@ class SimplifiedCADETApp(param.Parameterized):
             
             try:
                 process = mode.create_process(exp, result.column_binding)
-                sim_result = self.runner.run(process, h5_dir=h5_dir)
+                sim_result = self.runner.run(process)
                 self._simulation_results.append(sim_result)
                 
                 if sim_result.success:
@@ -644,7 +507,6 @@ class SimplifiedCADETApp(param.Parameterized):
                     )
                     
             except Exception as e:
-                from .simulation import SimulationResultWrapper
                 self._simulation_results.append(SimulationResultWrapper(
                     experiment_name=exp.name,
                     success=False,
@@ -666,8 +528,6 @@ class SimplifiedCADETApp(param.Parameterized):
         # Save to storage if any successful
         if successful > 0:
             try:
-                # Generate a name based on timestamp
-                from datetime import datetime
                 timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
                 set_name = f"Simulation_{timestamp}"
                 
@@ -680,7 +540,6 @@ class SimplifiedCADETApp(param.Parameterized):
                 )
                 
                 output_items.append(pn.pane.Markdown(f"\n✓ Results saved. Set ID: `{set_id}`"))
-                output_items.append(pn.pane.Markdown(f"✓ Excel export saved: `{set_name}.xlsx`"))
                 output_items.append(pn.pane.Markdown("*Go to the 'Saved' tab to browse and analyze results.*"))
                 self._simulation_output.objects = output_items
                 
@@ -691,7 +550,7 @@ class SimplifiedCADETApp(param.Parameterized):
     def _on_refresh_saved(self, event):
         """Refresh saved experiments table."""
         try:
-            df = self.storage.list_experiments(limit=25)
+            df = self.storage.list_experiments(limit=50)
             
             if df.empty:
                 self._saved_experiments_table.value = pd.DataFrame({
@@ -732,7 +591,7 @@ class SimplifiedCADETApp(param.Parameterized):
         # Get selected rows
         selected_rows = df.iloc[selection]
         
-        # Build selection list: [(set_id, exp_name), ...]
+        # Build selection list
         selections = [
             (row["experiment_set_id"], row["experiment_name"])
             for _, row in selected_rows.iterrows()
@@ -745,7 +604,7 @@ class SimplifiedCADETApp(param.Parameterized):
         try:
             self._loaded_experiments = self.storage.load_results_by_selection(
                 selections=selections,
-                n_workers=self.n_load_workers,
+                include_chromatogram=True,
             )
             
             self._load_progress.value = 100
@@ -775,19 +634,14 @@ class SimplifiedCADETApp(param.Parameterized):
             ]
             return
         
-        analysis_name = self._analysis_type_selector.value
-        if not analysis_name:
-            return
+        analysis_type = self._analysis_type_selector.value
         
         try:
-            # Clear and run analysis
-            self._analysis_view.clear()
-            analysis = get_analysis(analysis_name)
-            analysis.run(self._loaded_experiments, self._analysis_view)
-            
-            # Update container
-            self._analysis_container.objects = [self._analysis_view.view()]
-            
+            if analysis_type == "overlay":
+                self._run_overlay_analysis()
+            else:
+                self._run_individual_analysis()
+                
         except Exception as e:
             import traceback
             tb = traceback.format_exc()
@@ -795,6 +649,111 @@ class SimplifiedCADETApp(param.Parameterized):
                 pn.pane.Alert(f"Analysis error: {e}", alert_type="danger"),
                 pn.pane.Markdown(f"```\n{tb}\n```"),
             ]
+    
+    def _run_overlay_analysis(self):
+        """Create chromatogram overlay plot."""
+        components = []
+        
+        # Header
+        components.append(pn.pane.Markdown("## Chromatogram Overlay"))
+        components.append(pn.pane.Markdown(f"*{len(self._loaded_experiments)} experiment(s) selected*"))
+        
+        # Prepare chromatograms for overlay
+        chromatograms = []
+        for exp in self._loaded_experiments:
+            if exp.chromatogram_df is not None:
+                label = f"{exp.experiment_set_name}/{exp.experiment_name}"
+                chromatograms.append((label, exp.chromatogram_df))
+        
+        if chromatograms:
+            try:
+                plot = plot_chromatogram_overlay_from_df(
+                    chromatograms,
+                    title="Chromatogram Overlay",
+                    width=900,
+                    height=450,
+                )
+                components.append(pn.pane.HoloViews(plot, sizing_mode='stretch_width'))
+            except Exception as e:
+                components.append(pn.pane.Alert(f"Could not create plot: {e}", alert_type="warning"))
+        else:
+            components.append(pn.pane.Alert("No chromatogram data available", alert_type="info"))
+        
+        components.append(pn.layout.Divider())
+        
+        # Summary table
+        components.append(pn.pane.Markdown("### Selected Experiments"))
+        summary_df = self._create_summary_table()
+        components.append(pn.widgets.Tabulator(
+            summary_df,
+            height=min(200, 50 + len(self._loaded_experiments) * 30),
+            sizing_mode='stretch_width',
+            disabled=True,
+        ))
+        
+        self._analysis_container.objects = components
+    
+    def _run_individual_analysis(self):
+        """Create individual chromatogram plots."""
+        components = []
+        
+        components.append(pn.pane.Markdown("## Individual Chromatograms"))
+        components.append(pn.pane.Markdown(f"*{len(self._loaded_experiments)} experiment(s) selected*"))
+        components.append(pn.layout.Divider())
+        
+        for exp in self._loaded_experiments:
+            components.append(pn.pane.Markdown(f"### {exp.experiment_set_name} / {exp.experiment_name}"))
+            
+            if exp.chromatogram_df is not None:
+                try:
+                    plot = plot_chromatogram_from_df(
+                        exp.chromatogram_df,
+                        title=exp.experiment_name,
+                        width=800,
+                        height=350,
+                    )
+                    components.append(pn.pane.HoloViews(plot, sizing_mode='stretch_width'))
+                except Exception as e:
+                    components.append(pn.pane.Alert(f"Could not create plot: {e}", alert_type="warning"))
+            else:
+                components.append(pn.pane.Alert("No chromatogram data available", alert_type="info"))
+            
+            components.append(pn.Spacer(height=20))
+        
+        self._analysis_container.objects = components
+    
+    def _create_summary_table(self) -> pd.DataFrame:
+        """Create summary table of selected experiments."""
+        rows = []
+        
+        for exp in self._loaded_experiments:
+            row = {
+                "Experiment Set": exp.experiment_set_name,
+                "Experiment": exp.experiment_name,
+                "Column Model": exp.column_binding.column_model,
+                "Binding Model": exp.column_binding.binding_model,
+            }
+            
+            # Add some key parameters
+            params = exp.experiment_config.parameters
+            if "flow_rate_mL_min" in params:
+                row["Flow Rate (mL/min)"] = params["flow_rate_mL_min"]
+            if "gradient_start_mM" in params:
+                row["Gradient Start (mM)"] = params["gradient_start_mM"]
+            if "gradient_end_mM" in params:
+                row["Gradient End (mM)"] = params["gradient_end_mM"]
+            
+            # Result info
+            if exp.result.success:
+                row["Status"] = "✓ Success"
+                row["Runtime (s)"] = f"{exp.result.runtime_seconds:.2f}"
+            else:
+                row["Status"] = "✗ Failed"
+                row["Runtime (s)"] = "-"
+            
+            rows.append(row)
+        
+        return pd.DataFrame(rows)
     
     def _update_status(self, alert_type: str):
         """Update status pane."""
@@ -827,18 +786,13 @@ class SimplifiedCADETApp(param.Parameterized):
         # Tab 3: Simulate
         simulate_tab = pn.Column(
             pn.pane.Markdown("## 3. Run Simulations"),
-            pn.pane.Markdown("### CADET Configuration"),
-            self._cadet_path_input,
-            self._cadet_path_status,
-            self._cadet_path_help,
-            pn.layout.Divider(),
             pn.Row(self._simulate_btn),
             self._simulation_progress,
             self._simulation_output,
             sizing_mode='stretch_width',
         )
         
-        # Tab 4: Saved Experiments (was Tab 5)
+        # Tab 4: Saved Experiments
         saved_tab = pn.Column(
             pn.pane.Markdown("## 4. Saved Experiments"),
             pn.pane.Markdown("*Select experiments to load for analysis*"),
@@ -849,7 +803,7 @@ class SimplifiedCADETApp(param.Parameterized):
             sizing_mode='stretch_width',
         )
         
-        # Tab 5: Analysis (new)
+        # Tab 5: Analysis
         analysis_tab = pn.Column(
             pn.pane.Markdown("## 5. Analysis"),
             pn.Row(
@@ -885,7 +839,6 @@ class SimplifiedCADETApp(param.Parameterized):
 def create_app(
     storage_dir: str = "./experiments",
     cadet_path: str | None = None,
-    n_load_workers: int = 4,
 ) -> SimplifiedCADETApp:
     """Create the application.
     
@@ -895,8 +848,6 @@ def create_app(
         Directory for storing experiment data
     cadet_path : str, optional
         Path to CADET installation
-    n_load_workers : int, default=4
-        Number of workers for parallel loading
         
     Returns
     -------
@@ -906,14 +857,12 @@ def create_app(
     return SimplifiedCADETApp(
         storage_dir=storage_dir,
         cadet_path=cadet_path,
-        n_load_workers=n_load_workers,
     )
 
 
 def serve(
     storage_dir: str = "./experiments",
     cadet_path: str | None = None,
-    n_load_workers: int = 4,
     **kwargs
 ):
     """Serve the application.
@@ -924,19 +873,17 @@ def serve(
         Directory for storing experiment data
     cadet_path : str, optional
         Path to CADET installation
-    n_load_workers : int, default=4
-        Number of workers for parallel loading
     **kwargs
         Additional arguments passed to pn.serve()
     """
     app = create_app(
         storage_dir=storage_dir,
         cadet_path=cadet_path,
-        n_load_workers=n_load_workers,
     )
     pn.serve(app.view(), **kwargs)
 
 
-# For running directly
-if __name__ == "__main__":
-    serve(port=5007, show=True)
+# For panel serve
+if __name__.startswith("bokeh"):
+    app = create_app()
+    app.view().servable()

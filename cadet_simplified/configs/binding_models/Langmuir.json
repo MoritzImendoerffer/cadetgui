@@ -1,0 +1,40 @@
+{
+  "name": "Langmuir",
+  "cadet_class": "CADETProcess.processModel.Langmuir",
+  "description": "Langmuir isotherm for simple adsorption",
+  "scalar_parameters": [
+    {
+      "name": "is_kinetic",
+      "type": "bool",
+      "default": true,
+      "unit": "-",
+      "description": "Use kinetic binding (true) or rapid equilibrium (false)"
+    }
+  ],
+  "component_parameters": [
+    {
+      "name": "adsorption_rate",
+      "type": "float",
+      "default": null,
+      "unit": "1/(mM·s)",
+      "bounds": [0, null],
+      "description": "Adsorption rate constant"
+    },
+    {
+      "name": "desorption_rate",
+      "type": "float",
+      "default": null,
+      "unit": "1/s",
+      "bounds": [0, null],
+      "description": "Desorption rate constant"
+    },
+    {
+      "name": "capacity",
+      "type": "float",
+      "default": null,
+      "unit": "mM",
+      "bounds": [0, null],
+      "description": "Maximum binding capacity"
+    }
+  ]
+}

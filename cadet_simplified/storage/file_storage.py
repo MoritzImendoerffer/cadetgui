@@ -1,53 +1,124 @@
-"""File-based storage implementation for experiment results.
+"""File-based storage for experiment results.
 
-Stores experiments in a structured folder hierarchy:
+Simplified storage structure:
     {storage_dir}/{experiment_set_id}/
-    ├── config.json              # ExperimentSet metadata + configs
-    ├── {set_name}.xlsx          # Excel export (config + chromatograms)
-    ├── chromatograms/
-    │   ├── {exp_name}.parquet   # Interpolated chromatogram [time, comp_0, ...]
-    │   └── ...
+    ├── config.json              # Metadata + ExperimentConfig + ColumnBindingConfig
     ├── results/
-    │   ├── {exp_name}.pkl       # Pickled SimulationResultWrapper
-    │   └── ...
-    └── h5/
-        ├── {exp_name}.h5        # CADET H5 files
-        └── ...
+    │   └── {exp_name}.pkl       # Pickled SimulationResultWrapper
+    └── chromatograms/
+        └── {exp_name}.parquet   # Cached interpolated chromatogram
 
-Temporary files during simulation:
-    {storage_dir}/_pending/
-        ├── {exp_name}.h5        # H5 files before experiment set is saved
-        └── ...
+Usage:
+    >>> storage = FileStorage("./experiments")
+    >>> 
+    >>> # Save after simulation
+    >>> set_id = storage.save_experiment_set(
+    ...     name="IEX Screening",
+    ...     operation_mode="LWE_concentration_based",
+    ...     experiments=configs,
+    ...     column_binding=col_bind,
+    ...     results=sim_results,
+    ... )
+    >>> 
+    >>> # List for UI
+    >>> df = storage.list_experiments(limit=25)
+    >>> 
+    >>> # Load for analysis
+    >>> loaded = storage.load_results(set_id)
 """
 
+from dataclasses import dataclass, field
+from datetime import datetime
+from pathlib import Path
+from typing import Any, TYPE_CHECKING
 import hashlib
 import json
 import pickle
 import shutil
-from concurrent.futures import ProcessPoolExecutor, ThreadPoolExecutor, as_completed
-from dataclasses import asdict
-from datetime import datetime
-from pathlib import Path
-from typing import Any, TYPE_CHECKING
 
-import numpy as np
 import pandas as pd
 
-from .interfaces import (
-    ResultsStorageInterface,
-    StoredExperimentInfo,
-    LoadedExperiment,
-)
-from .experiment_store import (
-    StoredExperiment,
-    StoredColumnBinding,
-    ExperimentSet,
-)
+from ..core import ExperimentConfig, ColumnBindingConfig, ComponentDefinition
+from ..plotting import interpolate_chromatogram
 
 if TYPE_CHECKING:
     from ..simulation.runner import SimulationResultWrapper
-    from ..operation_modes import ExperimentConfig, ColumnBindingConfig
 
+
+# =============================================================================
+# Data containers for loaded data
+# =============================================================================
+
+@dataclass
+class LoadedExperiment:
+    """A fully loaded experiment with results.
+    
+    Contains everything needed for analysis.
+    
+    Attributes
+    ----------
+    experiment_set_id : str
+        ID of the experiment set
+    experiment_set_name : str
+        Human-readable name of the experiment set
+    experiment_name : str
+        Name of this specific experiment
+    result : SimulationResultWrapper
+        Full simulation result
+    experiment_config : ExperimentConfig
+        Experiment configuration
+    column_binding : ColumnBindingConfig
+        Column and binding configuration
+    chromatogram_df : pd.DataFrame, optional
+        Cached interpolated chromatogram
+    """
+    experiment_set_id: str
+    experiment_set_name: str
+    experiment_name: str
+    result: "SimulationResultWrapper"
+    experiment_config: ExperimentConfig
+    column_binding: ColumnBindingConfig
+    chromatogram_df: pd.DataFrame | None = None
+
+
+@dataclass
+class ExperimentInfo:
+    """Metadata about a stored experiment (for listing/browsing).
+    
+    Lightweight - doesn't load the actual results.
+    """
+    experiment_set_id: str
+    experiment_set_name: str
+    experiment_name: str
+    created_at: datetime
+    n_components: int
+    component_names: list[str]
+    operation_mode: str
+    column_model: str
+    binding_model: str
+    has_results: bool = False
+    has_chromatogram: bool = False
+    
+    def to_dict(self) -> dict[str, Any]:
+        """Convert to dictionary for DataFrame."""
+        return {
+            "experiment_set_id": self.experiment_set_id,
+            "experiment_set_name": self.experiment_set_name,
+            "experiment_name": self.experiment_name,
+            "created_at": self.created_at.isoformat() if isinstance(self.created_at, datetime) else self.created_at,
+            "n_components": self.n_components,
+            "component_names": ", ".join(self.component_names),
+            "operation_mode": self.operation_mode,
+            "column_model": self.column_model,
+            "binding_model": self.binding_model,
+            "has_results": self.has_results,
+            "has_chromatogram": self.has_chromatogram,
+        }
+
+
+# =============================================================================
+# Helper functions
+# =============================================================================
 
 def _sanitize_filename(name: str) -> str:
     """Sanitize string for use as filename."""
@@ -56,131 +127,36 @@ def _sanitize_filename(name: str) -> str:
     for char in invalid_chars:
         result = result.replace(char, '_')
     result = result.strip('. ')
-    if len(result) > 100:
-        result = result[:100]
-    return result or "unnamed"
+    return result[:100] if len(result) > 100 else (result or "unnamed")
 
 
-def _sanitize_sheet_name(name: str) -> str:
-    """Sanitize string for use as Excel sheet name (max 31 chars)."""
-    invalid_chars = '[]:*?/\\'
-    result = name
-    for char in invalid_chars:
-        result = result.replace(char, '_')
-    return result[:31]
+def _generate_id(name: str) -> str:
+    """Generate a unique ID from name and timestamp."""
+    timestamp = datetime.now().isoformat()
+    id_string = f"{name}_{timestamp}"
+    return hashlib.md5(id_string.encode()).hexdigest()[:12]
 
 
-def _load_single_result(args: tuple[Path, str, str, dict, dict]) -> LoadedExperiment | None:
-    """Load a single experiment result (for parallel execution).
+# =============================================================================
+# Main storage class
+# =============================================================================
+
+class FileStorage:
+    """File-based storage for experiment results.
     
     Parameters
     ----------
-    args : tuple
-        (pkl_path, experiment_set_id, experiment_set_name, exp_config_dict, column_binding_dict)
-        
-    Returns
-    -------
-    LoadedExperiment or None
-        Loaded experiment, or None if loading fails
+    storage_dir : str or Path
+        Base directory for all stored experiments
+    n_interpolation_points : int, default=2000
+        Number of points for chromatogram interpolation
     """
-    from ..operation_modes import ExperimentConfig, ColumnBindingConfig, ComponentDefinition
-    
-    pkl_path, experiment_set_id, experiment_set_name, exp_config_dict, col_bind_dict = args
-    
-    try:
-        # Load pickled result
-        with open(pkl_path, 'rb') as f:
-            result = pickle.load(f)
-        
-        # Reconstruct ExperimentConfig
-        components = [
-            ComponentDefinition(
-                name=c["name"],
-                is_salt=c.get("is_salt", False),
-                molecular_weight=c.get("molecular_weight"),
-            )
-            for c in exp_config_dict["components"]
-        ]
-        experiment_config = ExperimentConfig(
-            name=exp_config_dict["name"],
-            parameters=exp_config_dict["parameters"],
-            components=components,
-        )
-        
-        # Reconstruct ColumnBindingConfig
-        column_binding = ColumnBindingConfig(
-            column_model=col_bind_dict["column_model"],
-            binding_model=col_bind_dict["binding_model"],
-            column_parameters=col_bind_dict["column_parameters"],
-            binding_parameters=col_bind_dict["binding_parameters"],
-            component_column_parameters=col_bind_dict.get("component_column_parameters", {}),
-            component_binding_parameters=col_bind_dict.get("component_binding_parameters", {}),
-        )
-        
-        # Try to load chromatogram
-        chrom_path = pkl_path.parent.parent / "chromatograms" / f"{_sanitize_filename(exp_config_dict['name'])}.parquet"
-        chromatogram_df = None
-        if chrom_path.exists():
-            chromatogram_df = pd.read_parquet(chrom_path)
-        
-        return LoadedExperiment(
-            experiment_set_id=experiment_set_id,
-            experiment_set_name=experiment_set_name,
-            experiment_name=exp_config_dict["name"],
-            result=result,
-            experiment_config=experiment_config,
-            column_binding=column_binding,
-            chromatogram_df=chromatogram_df,
-        )
-        
-    except Exception as e:
-        print(f"Error loading {pkl_path}: {e}")
-        return None
-
-
-class FileResultsStorage(ResultsStorageInterface):
-    """File-based implementation of results storage.
-    
-    Example:
-        storage = FileResultsStorage("./experiments")
-        
-        # Run simulations with H5 files in pending directory
-        runner = SimulationRunner()
-        results = runner.run_batch(processes, h5_dir=storage.get_pending_dir())
-        
-        # After simulation - save moves H5 files to final location
-        set_id = storage.save_experiment_set(
-            name="IEX Screening",
-            operation_mode="LWE_concentration_based",
-            experiments=configs,
-            column_binding=col_bind,
-            results=sim_results,
-        )
-        
-        # Later, for analysis
-        experiments_df = storage.list_experiments(limit=25)
-        loaded = storage.load_results_by_selection([
-            (set_id, "experiment_1"),
-            (set_id, "experiment_2"),
-        ])
-    """
-    
-    PENDING_DIR_NAME = "_pending"
     
     def __init__(
         self,
         storage_dir: str | Path,
-        n_interpolation_points: int = 500,
+        n_interpolation_points: int = 2000,
     ):
-        """Initialize file-based storage.
-        
-        Parameters
-        ----------
-        storage_dir : str or Path
-            Base directory for all stored experiments
-        n_interpolation_points : int, default=500
-            Number of points for chromatogram interpolation
-        """
         self.storage_dir = Path(storage_dir)
         self.storage_dir.mkdir(parents=True, exist_ok=True)
         self.n_interpolation_points = n_interpolation_points
@@ -189,282 +165,49 @@ class FileResultsStorage(ResultsStorageInterface):
         """Get directory for an experiment set."""
         return self.storage_dir / experiment_set_id
     
-    def _generate_id(self, name: str) -> str:
-        """Generate a unique ID for an experiment set."""
-        timestamp = datetime.now().isoformat()
-        id_string = f"{name}_{timestamp}"
-        return hashlib.md5(id_string.encode()).hexdigest()[:12]
-    
-    def get_pending_dir(self) -> Path:
-        """Get the directory for temporary H5 files during simulation.
-        
-        Use this as the h5_dir parameter for SimulationRunner.run() or run_batch().
-        Files in this directory are moved to the final location when
-        save_experiment_set() is called.
-        
-        Returns
-        -------
-        Path
-            Path to the _pending directory
-        """
-        pending_dir = self.storage_dir / self.PENDING_DIR_NAME
-        pending_dir.mkdir(parents=True, exist_ok=True)
-        return pending_dir
-    
-    def clear_pending(self) -> int:
-        """Clear all files in the pending directory.
-        
-        Use this to clean up orphaned H5 files if a simulation was interrupted.
-        
-        Returns
-        -------
-        int
-            Number of files deleted
-        """
-        pending_dir = self.storage_dir / self.PENDING_DIR_NAME
-        if not pending_dir.exists():
-            return 0
-        
-        count = 0
-        for f in pending_dir.iterdir():
-            if f.is_file():
-                f.unlink()
-                count += 1
-        return count
-    
-    def _interpolate_chromatogram(
-        self,
-        result: "SimulationResultWrapper",
-        n_points: int | None = None,
-    ) -> pd.DataFrame | None:
-        """Interpolate chromatogram from simulation result.
-        
-        Returns DataFrame with columns [time, comp_0, comp_1, ...]
-        """
-        if result.cadet_result is None:
-            return None
-        
-        n_points = n_points or self.n_interpolation_points
-        
-        try:
-            process = result.cadet_result.process
-            product_outlets = process.flow_sheet.product_outlets
-            
-            if not product_outlets:
-                return None
-            
-            product_outlet = product_outlets[0]
-            outlet_solution = result.cadet_result.solution[product_outlet.name]
-            
-            time_complete = result.cadet_result.time_complete
-            time_interp = np.linspace(
-                float(time_complete.min()),
-                float(time_complete.max()),
-                n_points,
-            )
-            
-            interp_func = outlet_solution.outlet.solution_interpolated
-            solution_interp = interp_func(time_interp)
-            
-            # Build DataFrame with [time, comp_0, comp_1, ...]
-            data = {"time": time_interp}
-            for i, comp in enumerate(process.component_system.components):
-                comp_name = comp.name if hasattr(comp, 'name') else f"comp_{i}"
-                data[comp_name] = solution_interp[:, i]
-            
-            return pd.DataFrame(data)
-            
-        except Exception as e:
-            print(f"Warning: Failed to interpolate chromatogram: {e}")
-            return None
-    
-    def _export_experiment_set_excel(
-        self,
-        set_dir: Path,
-        set_name: str,
-        config_data: dict,
-        results: list["SimulationResultWrapper"],
-    ) -> Path | None:
-        """Export experiment set to Excel file.
-        
-        Creates an Excel file with:
-        - Experiments sheet: experiment parameters (same format as input template)
-        - Column_Binding sheet: column and binding parameters
-        - Summary sheet: simulation results (success, runtime, errors)
-        - One sheet per experiment: chromatogram data
-        
-        Parameters
-        ----------
-        set_dir : Path
-            Directory for the experiment set
-        set_name : str
-            Name of the experiment set (used for filename)
-        config_data : dict
-            Configuration data (from config.json structure)
-        results : list[SimulationResultWrapper]
-            Simulation results
-            
-        Returns
-        -------
-        Path or None
-            Path to created Excel file, or None if export failed
-        """
-        try:
-            excel_path = set_dir / f"{_sanitize_filename(set_name)}.xlsx"
-            
-            with pd.ExcelWriter(excel_path, engine='openpyxl') as writer:
-                # Sheet 1: Experiments
-                experiments_df = self._create_experiments_sheet(config_data)
-                experiments_df.to_excel(writer, sheet_name="Experiments", index=False)
-                
-                # Sheet 2: Column_Binding
-                column_binding_df = self._create_column_binding_sheet(config_data)
-                column_binding_df.to_excel(writer, sheet_name="Column_Binding", index=False)
-                
-                # Sheet 3: Summary
-                summary_df = self._create_summary_sheet(config_data, results)
-                summary_df.to_excel(writer, sheet_name="Summary", index=False)
-                
-                # Chromatogram sheets
-                for exp_config, result in zip(config_data["experiments"], results):
-                    if not result.success:
-                        continue
-                    
-                    chrom_df = self._interpolate_chromatogram(result)
-                    if chrom_df is not None:
-                        sheet_name = _sanitize_sheet_name(exp_config["name"])
-                        chrom_df.to_excel(writer, sheet_name=sheet_name, index=False)
-            
-            return excel_path
-            
-        except Exception as e:
-            print(f"Warning: Failed to export Excel: {e}")
-            return None
-    
-    def _create_experiments_sheet(self, config_data: dict) -> pd.DataFrame:
-        """Create Experiments sheet from config data."""
-        experiments = config_data["experiments"]
-        
-        if not experiments:
-            return pd.DataFrame()
-        
-        rows = []
-        for exp in experiments:
-            row = {"experiment_name": exp["name"]}
-            
-            # Add all parameters
-            for key, value in exp.get("parameters", {}).items():
-                row[key] = value
-            
-            # Add component names if present
-            for i, comp in enumerate(exp.get("components", [])):
-                row[f"component_{i+1}_name"] = comp.get("name", f"Component_{i+1}")
-            
-            rows.append(row)
-        
-        return pd.DataFrame(rows)
-    
-    def _create_column_binding_sheet(self, config_data: dict) -> pd.DataFrame:
-        """Create Column_Binding sheet from config data."""
-        col_bind = config_data["column_binding"]
-        
-        rows = []
-        
-        # Model selection
-        rows.append({"parameter": "# MODEL SELECTION", "value": "", "unit": "", "description": ""})
-        rows.append({"parameter": "column_model", "value": col_bind["column_model"], "unit": "-", "description": "Column model type"})
-        rows.append({"parameter": "binding_model", "value": col_bind["binding_model"], "unit": "-", "description": "Binding model type"})
-        
-        # Determine n_components from component parameters
-        n_comp = 0
-        for key, values in col_bind.get("component_binding_parameters", {}).items():
-            if isinstance(values, list):
-                n_comp = max(n_comp, len(values))
-        for key, values in col_bind.get("component_column_parameters", {}).items():
-            if isinstance(values, list):
-                n_comp = max(n_comp, len(values))
-        
-        rows.append({"parameter": "n_components", "value": n_comp, "unit": "-", "description": "Number of components"})
-        
-        # Column parameters (scalar)
-        rows.append({"parameter": "# COLUMN PARAMETERS (SCALAR)", "value": "", "unit": "", "description": ""})
-        for param, value in col_bind.get("column_parameters", {}).items():
-            rows.append({"parameter": param, "value": value, "unit": "-", "description": ""})
-        
-        # Column parameters (per-component)
-        comp_col_params = col_bind.get("component_column_parameters", {})
-        if comp_col_params:
-            rows.append({"parameter": "# COLUMN PARAMETERS (PER-COMPONENT)", "value": "", "unit": "", "description": ""})
-            for param, values in comp_col_params.items():
-                if isinstance(values, list):
-                    for i, val in enumerate(values):
-                        rows.append({"parameter": f"{param}_component_{i+1}", "value": val, "unit": "-", "description": ""})
-        
-        # Binding parameters (scalar)
-        rows.append({"parameter": "# BINDING PARAMETERS (SCALAR)", "value": "", "unit": "", "description": ""})
-        for param, value in col_bind.get("binding_parameters", {}).items():
-            rows.append({"parameter": param, "value": value, "unit": "-", "description": ""})
-        
-        # Binding parameters (per-component)
-        comp_bind_params = col_bind.get("component_binding_parameters", {})
-        if comp_bind_params:
-            rows.append({"parameter": "# BINDING PARAMETERS (PER-COMPONENT)", "value": "", "unit": "", "description": ""})
-            for param, values in comp_bind_params.items():
-                if isinstance(values, list):
-                    for i, val in enumerate(values):
-                        rows.append({"parameter": f"{param}_component_{i+1}", "value": val, "unit": "-", "description": ""})
-        
-        return pd.DataFrame(rows)
-    
-    def _create_summary_sheet(
-        self,
-        config_data: dict,
-        results: list["SimulationResultWrapper"],
-    ) -> pd.DataFrame:
-        """Create Summary sheet with simulation results."""
-        rows = []
-        
-        experiments = config_data["experiments"]
-        
-        for exp, result in zip(experiments, results):
-            row = {
-                "experiment_name": exp["name"],
-                "success": result.success,
-                "runtime_seconds": result.runtime_seconds if result.success else None,
-                "errors": "; ".join(result.errors) if result.errors else "",
-                "warnings": "; ".join(result.warnings) if result.warnings else "",
-            }
-            rows.append(row)
-        
-        return pd.DataFrame(rows)
+    # -------------------------------------------------------------------------
+    # Saving
+    # -------------------------------------------------------------------------
     
     def save_experiment_set(
         self,
         name: str,
         operation_mode: str,
-        experiments: list["ExperimentConfig"],
-        column_binding: "ColumnBindingConfig",
+        experiments: list[ExperimentConfig],
+        column_binding: ColumnBindingConfig,
         results: list["SimulationResultWrapper"],
         description: str = "",
     ) -> str:
-        """Save a complete experiment set with results."""
-        # Generate ID and create directory structure
-        set_id = self._generate_id(name)
+        """Save a complete experiment set with results.
+        
+        Parameters
+        ----------
+        name : str
+            Human-readable name
+        operation_mode : str
+            Operation mode used
+        experiments : list[ExperimentConfig]
+            Experiment configurations
+        column_binding : ColumnBindingConfig
+            Column and binding configuration
+        results : list[SimulationResultWrapper]
+            Simulation results
+        description : str, optional
+            Description
+            
+        Returns
+        -------
+        str
+            Generated experiment_set_id
+        """
+        # Generate ID and create directories
+        set_id = _generate_id(name)
         set_dir = self._get_set_dir(set_id)
         
-        (set_dir / "chromatograms").mkdir(parents=True, exist_ok=True)
         (set_dir / "results").mkdir(parents=True, exist_ok=True)
-        (set_dir / "h5").mkdir(parents=True, exist_ok=True)
+        (set_dir / "chromatograms").mkdir(parents=True, exist_ok=True)
         
         timestamp = datetime.now().isoformat()
-        
-        # Convert configs to storable format
-        stored_experiments = []
-        for exp in experiments:
-            stored_exp = StoredExperiment.from_experiment_config(exp)
-            stored_experiments.append(asdict(stored_exp))
-        
-        stored_column_binding = StoredColumnBinding.from_column_binding_config(column_binding)
         
         # Build config.json
         config_data = {
@@ -472,122 +215,143 @@ class FileResultsStorage(ResultsStorageInterface):
             "name": name,
             "operation_mode": operation_mode,
             "description": description,
-            "column_binding": asdict(stored_column_binding),
-            "experiments": stored_experiments,
+            "column_binding": column_binding.to_dict(),
+            "experiments": [exp.to_dict() for exp in experiments],
             "created_at": timestamp,
             "updated_at": timestamp,
         }
         
         # Save config
-        config_path = set_dir / "config.json"
-        with open(config_path, 'w') as f:
+        with open(set_dir / "config.json", "w") as f:
             json.dump(config_data, f, indent=2)
         
-        # Track H5 files that were successfully copied (for cleanup)
-        h5_sources_to_cleanup: list[Path] = []
-        
-        # Save results for each experiment
+        # Save results
         for exp, result in zip(experiments, results):
             if not result.success:
                 continue
             
             safe_name = _sanitize_filename(exp.name)
             
-            # 1. Pickle the full result
-            pkl_path = set_dir / "results" / f"{safe_name}.pkl"
-            with open(pkl_path, 'wb') as f:
+            # Pickle the full result
+            with open(set_dir / "results" / f"{safe_name}.pkl", "wb") as f:
                 pickle.dump(result, f)
             
-            # 2. Save interpolated chromatogram as parquet
-            chrom_df = self._interpolate_chromatogram(result)
-            if chrom_df is not None:
-                chrom_path = set_dir / "chromatograms" / f"{safe_name}.parquet"
-                chrom_df.to_parquet(chrom_path, index=False)
-            
-            # 3. Copy H5 file if it exists
-            if result.h5_path is not None and result.h5_path.exists():
-                h5_dest = set_dir / "h5" / f"{safe_name}.h5"
-                if result.h5_path != h5_dest:
-                    shutil.copy2(result.h5_path, h5_dest)
-                    h5_sources_to_cleanup.append(result.h5_path)
-        
-        # All saves succeeded - clean up source H5 files
-        for h5_source in h5_sources_to_cleanup:
-            try:
-                if h5_source.exists():
-                    h5_source.unlink()
-            except Exception as e:
-                print(f"Warning: Could not delete source H5 file {h5_source}: {e}")
-        
-        # Export Excel file
-        self._export_experiment_set_excel(set_dir, name, config_data, results)
+            # Cache interpolated chromatogram
+            if result.cadet_result is not None:
+                try:
+                    chrom_df = interpolate_chromatogram(
+                        result,
+                        n_points=self.n_interpolation_points,
+                        time_unit="minutes",
+                    )
+                    chrom_df.to_parquet(
+                        set_dir / "chromatograms" / f"{safe_name}.parquet",
+                        index=False,
+                    )
+                except Exception as e:
+                    print(f"Warning: Could not cache chromatogram for {exp.name}: {e}")
         
         return set_id
+    
+    # -------------------------------------------------------------------------
+    # Loading
+    # -------------------------------------------------------------------------
     
     def load_results(
         self,
         experiment_set_id: str,
         experiment_names: list[str] | None = None,
-        n_workers: int = 1,
+        include_chromatogram: bool = True,
     ) -> list[LoadedExperiment]:
-        """Load results for specific experiments."""
+        """Load results for an experiment set.
+        
+        Parameters
+        ----------
+        experiment_set_id : str
+            ID of the experiment set
+        experiment_names : list[str], optional
+            Specific experiments to load. If None, loads all.
+        include_chromatogram : bool, default=True
+            Whether to load cached chromatogram
+            
+        Returns
+        -------
+        list[LoadedExperiment]
+            Loaded experiments
+        """
         set_dir = self._get_set_dir(experiment_set_id)
         config_path = set_dir / "config.json"
         
         if not config_path.exists():
             return []
         
-        with open(config_path, 'r') as f:
+        with open(config_path, "r") as f:
             config_data = json.load(f)
         
-        # Build list of experiments to load
-        experiments_to_load = config_data["experiments"]
-        if experiment_names is not None:
-            experiments_to_load = [
-                e for e in experiments_to_load
-                if e["name"] in experiment_names
-            ]
+        # Build column binding
+        column_binding = ColumnBindingConfig.from_dict(config_data["column_binding"])
         
-        # Prepare loading args
-        load_args = []
-        for exp_config in experiments_to_load:
-            safe_name = _sanitize_filename(exp_config["name"])
+        # Load experiments
+        loaded = []
+        
+        for exp_dict in config_data["experiments"]:
+            exp_name = exp_dict["name"]
+            
+            # Filter if requested
+            if experiment_names is not None and exp_name not in experiment_names:
+                continue
+            
+            safe_name = _sanitize_filename(exp_name)
             pkl_path = set_dir / "results" / f"{safe_name}.pkl"
             
-            if pkl_path.exists():
-                load_args.append((
-                    pkl_path,
-                    experiment_set_id,
-                    config_data["name"],
-                    exp_config,
-                    config_data["column_binding"],
-                ))
+            if not pkl_path.exists():
+                continue
+            
+            # Load result
+            with open(pkl_path, "rb") as f:
+                result = pickle.load(f)
+            
+            # Load chromatogram if requested
+            chromatogram_df = None
+            if include_chromatogram:
+                chrom_path = set_dir / "chromatograms" / f"{safe_name}.parquet"
+                if chrom_path.exists():
+                    chromatogram_df = pd.read_parquet(chrom_path)
+            
+            # Build ExperimentConfig
+            experiment_config = ExperimentConfig.from_dict(exp_dict)
+            
+            loaded.append(LoadedExperiment(
+                experiment_set_id=experiment_set_id,
+                experiment_set_name=config_data["name"],
+                experiment_name=exp_name,
+                result=result,
+                experiment_config=experiment_config,
+                column_binding=column_binding,
+                chromatogram_df=chromatogram_df,
+            ))
         
-        if not load_args:
-            return []
-        
-        # Load results (parallel or sequential)
-        if n_workers == 1:
-            results = [_load_single_result(args) for args in load_args]
-        else:
-            # Use ThreadPoolExecutor for I/O-bound pickle loading
-            results = []
-            with ThreadPoolExecutor(max_workers=n_workers) as executor:
-                futures = [executor.submit(_load_single_result, args) for args in load_args]
-                for future in as_completed(futures):
-                    result = future.result()
-                    if result is not None:
-                        results.append(result)
-        
-        # Filter None results
-        return [r for r in results if r is not None]
+        return loaded
     
     def load_results_by_selection(
         self,
         selections: list[tuple[str, str]],
-        n_workers: int = 1,
+        include_chromatogram: bool = True,
     ) -> list[LoadedExperiment]:
-        """Load results for a selection across multiple experiment sets."""
+        """Load results for a selection across multiple experiment sets.
+        
+        Parameters
+        ----------
+        selections : list[tuple[str, str]]
+            List of (experiment_set_id, experiment_name) pairs
+        include_chromatogram : bool, default=True
+            Whether to load cached chromatogram
+            
+        Returns
+        -------
+        list[LoadedExperiment]
+            Loaded experiments
+        """
         # Group by experiment set
         by_set: dict[str, list[str]] = {}
         for set_id, exp_name in selections:
@@ -595,67 +359,75 @@ class FileResultsStorage(ResultsStorageInterface):
                 by_set[set_id] = []
             by_set[set_id].append(exp_name)
         
-        # Prepare all loading args
-        all_load_args = []
-        
+        # Load from each set
+        all_loaded = []
         for set_id, exp_names in by_set.items():
-            set_dir = self._get_set_dir(set_id)
-            config_path = set_dir / "config.json"
-            
-            if not config_path.exists():
-                continue
-            
-            with open(config_path, 'r') as f:
-                config_data = json.load(f)
-            
-            # Find matching experiments
-            for exp_config in config_data["experiments"]:
-                if exp_config["name"] in exp_names:
-                    safe_name = _sanitize_filename(exp_config["name"])
-                    pkl_path = set_dir / "results" / f"{safe_name}.pkl"
-                    
-                    if pkl_path.exists():
-                        all_load_args.append((
-                            pkl_path,
-                            set_id,
-                            config_data["name"],
-                            exp_config,
-                            config_data["column_binding"],
-                        ))
+            loaded = self.load_results(
+                set_id,
+                experiment_names=exp_names,
+                include_chromatogram=include_chromatogram,
+            )
+            all_loaded.extend(loaded)
         
-        if not all_load_args:
-            return []
+        return all_loaded
+    
+    def get_chromatogram(
+        self,
+        experiment_set_id: str,
+        experiment_name: str,
+    ) -> pd.DataFrame | None:
+        """Load just the cached chromatogram (fast, no unpickling).
         
-        # Load results
-        if n_workers == 1:
-            results = [_load_single_result(args) for args in all_load_args]
-        else:
-            results = []
-            with ThreadPoolExecutor(max_workers=n_workers) as executor:
-                futures = [executor.submit(_load_single_result, args) for args in all_load_args]
-                for future in as_completed(futures):
-                    result = future.result()
-                    if result is not None:
-                        results.append(result)
+        Parameters
+        ----------
+        experiment_set_id : str
+            ID of the experiment set
+        experiment_name : str
+            Name of the experiment
+            
+        Returns
+        -------
+        pd.DataFrame or None
+            Chromatogram DataFrame, or None if not found
+        """
+        set_dir = self._get_set_dir(experiment_set_id)
+        safe_name = _sanitize_filename(experiment_name)
+        chrom_path = set_dir / "chromatograms" / f"{safe_name}.parquet"
         
-        return [r for r in results if r is not None]
+        if chrom_path.exists():
+            return pd.read_parquet(chrom_path)
+        return None
+    
+    # -------------------------------------------------------------------------
+    # Listing
+    # -------------------------------------------------------------------------
     
     def list_experiments(
         self,
         limit: int = 25,
         experiment_set_id: str | None = None,
     ) -> pd.DataFrame:
-        """List all stored experiments as a flat table."""
-        all_experiments: list[StoredExperimentInfo] = []
+        """List stored experiments as a flat table.
         
-        # Get all experiment set directories
+        Parameters
+        ----------
+        limit : int, default=25
+            Maximum number of experiments
+        experiment_set_id : str, optional
+            Filter to specific set
+            
+        Returns
+        -------
+        pd.DataFrame
+            Table of experiment info
+        """
+        all_experiments: list[ExperimentInfo] = []
+        
+        # Get experiment set directories
         if experiment_set_id is not None:
             set_dirs = [self._get_set_dir(experiment_set_id)]
         else:
-            set_dirs = [
-                d for d in self.storage_dir.iterdir() 
-                if d.is_dir() and d.name != self.PENDING_DIR_NAME
-            ]
+            set_dirs = [d for d in self.storage_dir.iterdir() if d.is_dir()]
         
         for set_dir in set_dirs:
             config_path = set_dir / "config.json"
@@ -663,7 +435,7 @@ class FileResultsStorage(ResultsStorageInterface):
                 continue
             
             try:
-                with open(config_path, 'r') as f:
+                with open(config_path, "r") as f:
                     config_data = json.load(f)
                 
                 set_id = config_data["id"]
@@ -672,23 +444,22 @@ class FileResultsStorage(ResultsStorageInterface):
                 col_bind = config_data["column_binding"]
                 created_at = config_data["created_at"]
                 
-                for exp_config in config_data["experiments"]:
-                    safe_name = _sanitize_filename(exp_config["name"])
+                for exp_dict in config_data["experiments"]:
+                    safe_name = _sanitize_filename(exp_dict["name"])
                     
                     # Check what files exist
                     has_results = (set_dir / "results" / f"{safe_name}.pkl").exists()
                     has_chromatogram = (set_dir / "chromatograms" / f"{safe_name}.parquet").exists()
-                    has_h5 = (set_dir / "h5" / f"{safe_name}.h5").exists()
                     
                     # Extract component info
-                    components = exp_config.get("components", [])
+                    components = exp_dict.get("components", [])
                     n_components = len(components)
                     component_names = [c.get("name", f"comp_{i}") for i, c in enumerate(components)]
                     
-                    exp_info = StoredExperimentInfo(
+                    exp_info = ExperimentInfo(
                         experiment_set_id=set_id,
                         experiment_set_name=set_name,
-                        experiment_name=exp_config["name"],
+                        experiment_name=exp_dict["name"],
                         created_at=datetime.fromisoformat(created_at) if isinstance(created_at, str) else created_at,
                         n_components=n_components,
                         component_names=component_names,
@@ -697,7 +468,6 @@ class FileResultsStorage(ResultsStorageInterface):
                         binding_model=col_bind["binding_model"],
                         has_results=has_results,
                         has_chromatogram=has_chromatogram,
-                        has_h5=has_h5,
                     )
                     all_experiments.append(exp_info)
                     
@@ -714,19 +484,23 @@ class FileResultsStorage(ResultsStorageInterface):
             return pd.DataFrame(columns=[
                 "experiment_set_id", "experiment_set_name", "experiment_name",
                 "created_at", "n_components", "component_names", "operation_mode",
-                "column_model", "binding_model", "has_results", "has_chromatogram", "has_h5",
+                "column_model", "binding_model", "has_results", "has_chromatogram",
             ])
         
         return pd.DataFrame([e.to_dict() for e in all_experiments])
     
     def list_experiment_sets(self) -> list[dict[str, Any]]:
-        """List all experiment sets (metadata only)."""
+        """List all experiment sets (metadata only).
+        
+        Returns
+        -------
+        list[dict]
+            List of experiment set metadata
+        """
         results = []
         
         for set_dir in self.storage_dir.iterdir():
             if not set_dir.is_dir():
-                continue
-            if set_dir.name == self.PENDING_DIR_NAME:
                 continue
             
             config_path = set_dir / "config.json"
@@ -734,7 +508,7 @@ class FileResultsStorage(ResultsStorageInterface):
                 continue
             
             try:
-                with open(config_path, 'r') as f:
+                with open(config_path, "r") as f:
                     data = json.load(f)
                 
                 results.append({
@@ -753,25 +527,26 @@ class FileResultsStorage(ResultsStorageInterface):
         results.sort(key=lambda x: x["updated_at"], reverse=True)
         return results
     
+    # -------------------------------------------------------------------------
+    # Deletion
+    # -------------------------------------------------------------------------
+    
     def delete_experiment_set(self, experiment_set_id: str) -> bool:
-        """Delete an experiment set and all its data."""
+        """Delete an experiment set.
+        
+        Parameters
+        ----------
+        experiment_set_id : str
+            ID to delete
+            
+        Returns
+        -------
+        bool
+            True if deleted, False if not found
+        """
         set_dir = self._get_set_dir(experiment_set_id)
         
         if set_dir.exists():
             shutil.rmtree(set_dir)
             return True
         return False
-    
-    def get_chromatogram(
-        self,
-        experiment_set_id: str,
-        experiment_name: str,
-    ) -> pd.DataFrame | None:
-        """Load just the chromatogram data (without full results)."""
-        set_dir = self._get_set_dir(experiment_set_id)
-        safe_name = _sanitize_filename(experiment_name)
-        chrom_path = set_dir / "chromatograms" / f"{safe_name}.parquet"
-        
-        if chrom_path.exists():
-            return pd.read_parquet(chrom_path)
-        return None

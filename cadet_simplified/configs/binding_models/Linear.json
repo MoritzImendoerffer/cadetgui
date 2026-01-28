@@ -1,0 +1,32 @@
+{
+  "name": "Linear",
+  "cadet_class": "CADETProcess.processModel.Linear",
+  "description": "Linear isotherm (Henry's law)",
+  "scalar_parameters": [
+    {
+      "name": "is_kinetic",
+      "type": "bool",
+      "default": false,
+      "unit": "-",
+      "description": "Use kinetic binding (true) or rapid equilibrium (false)"
+    }
+  ],
+  "component_parameters": [
+    {
+      "name": "adsorption_rate",
+      "type": "float",
+      "default": null,
+      "unit": "1/s",
+      "bounds": [0, null],
+      "description": "Adsorption rate constant (only used if is_kinetic=true)"
+    },
+    {
+      "name": "desorption_rate",
+      "type": "float",
+      "default": null,
+      "unit": "1/s",
+      "bounds": [0, null],
+      "description": "Desorption rate constant (only used if is_kinetic=true)"
+    }
+  ]
+}

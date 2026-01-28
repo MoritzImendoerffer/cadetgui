@@ -1,0 +1,48 @@
+{
+  "name": "LumpedRateModelWithoutPores",
+  "cadet_class": "CADETProcess.processModel.LumpedRateModelWithoutPores",
+  "description": "Lumped rate model without pores (simplest model)",
+  "scalar_parameters": [
+    {
+      "name": "length",
+      "type": "float",
+      "default": 0.1,
+      "unit": "m",
+      "bounds": [0, null],
+      "description": "Column length"
+    },
+    {
+      "name": "diameter",
+      "type": "float",
+      "default": 0.01,
+      "unit": "m",
+      "bounds": [0, null],
+      "description": "Column diameter"
+    },
+    {
+      "name": "total_porosity",
+      "type": "float",
+      "default": 0.6,
+      "unit": "-",
+      "bounds": [0, 1],
+      "description": "Total column porosity"
+    },
+    {
+      "name": "axial_dispersion",
+      "type": "float",
+      "default": 1e-7,
+      "unit": "m²/s",
+      "bounds": [0, null],
+      "description": "Axial dispersion coefficient"
+    },
+    {
+      "name": "flow_direction",
+      "type": "int",
+      "default": 1,
+      "unit": "-",
+      "bounds": [-1, 1],
+      "description": "Flow direction (1=forward, -1=backward)"
+    }
+  ],
+  "component_parameters": []
+}

@@ -1,0 +1,72 @@
+{
+  "name": "StericMassAction",
+  "cadet_class": "CADETProcess.processModel.StericMassAction",
+  "description": "Steric mass action isotherm for ion exchange chromatography",
+  "scalar_parameters": [
+    {
+      "name": "is_kinetic",
+      "type": "bool",
+      "default": true,
+      "unit": "-",
+      "description": "Use kinetic binding (true) or rapid equilibrium (false)"
+    },
+    {
+      "name": "reference_liquid_phase_conc",
+      "type": "float",
+      "default": 1.0,
+      "unit": "mM",
+      "bounds": [0, null],
+      "description": "Reference liquid phase concentration for non-dimensionalization"
+    },
+    {
+      "name": "reference_solid_phase_conc",
+      "type": "float",
+      "default": 1.0,
+      "unit": "mM",
+      "bounds": [0, null],
+      "description": "Reference solid phase concentration for non-dimensionalization"
+    }
+  ],
+  "component_parameters": [
+    {
+      "name": "adsorption_rate",
+      "type": "float",
+      "default": null,
+      "unit": "1/(mM·s)",
+      "bounds": [0, null],
+      "description": "Adsorption rate constant"
+    },
+    {
+      "name": "desorption_rate",
+      "type": "float",
+      "default": null,
+      "unit": "1/s",
+      "bounds": [0, null],
+      "description": "Desorption rate constant"
+    },
+    {
+      "name": "characteristic_charge",
+      "type": "float",
+      "default": null,
+      "unit": "-",
+      "bounds": [0, null],
+      "description": "Characteristic charge (nu) - number of binding sites occupied"
+    },
+    {
+      "name": "steric_factor",
+      "type": "float",
+      "default": null,
+      "unit": "-",
+      "bounds": [0, null],
+      "description": "Steric factor (sigma) - steric shielding parameter"
+    },
+    {
+      "name": "capacity",
+      "type": "float",
+      "default": null,
+      "unit": "mM",
+      "bounds": [0, null],
+      "description": "Ion exchange capacity (Lambda)"
+    }
+  ]
+}
