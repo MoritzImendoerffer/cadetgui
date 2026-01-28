@@ -1,82 +1,98 @@
 from pathlib import Path
-from cadet_simplified.operation_modes import (
-    OPERATION_MODES,
-    SUPPORTED_COLUMN_MODELS,
-    SUPPORTED_BINDING_MODELS,
-    get_operation_mode,
-)
-from cadet_simplified.excel import ExcelTemplateGenerator, ExcelParser
-from cadet_simplified.storage import FileResultsStorage
-from cadet_simplified.results import ResultsExporter  # For standalone Excel exports
-from cadet_simplified.simulation import SimulationRunner
 
-print(100*"=")
+from cadet_simplified import (
+    list_column_models,
+    list_binding_models,
+    list_operation_modes,
+    get_operation_mode,
+    ExcelTemplateGenerator,
+    parse_excel,
+    plotting,
+    SimulationRunner,
+    # Storage
+    FileStorage,
+)
+print(100 * "=")
 print("SUPPORTED COLUMN MODELS")
-print(SUPPORTED_COLUMN_MODELS)
-print(100*"-")
+print(list_column_models())
+print(100 * "-")
 print("SUPPORTED BINDING MODELS")
-print(SUPPORTED_BINDING_MODELS)
-print(100*"-")
+print(list_binding_models())
+print(100 * "-")
 print("SUPPORTED OPERATION MODES")
-print(OPERATION_MODES)
-print(100*"=")
+print(list_operation_modes())
+print(100 * "=")
 
 col = "LumpedRateModelWithoutPores"
 bim = "StericMassAction"
 opm = "LWE_concentration_based"
-
 n_components = 3
-temp_gen = ExcelTemplateGenerator(column_model=col, binding_model=bim, operation_mode=opm, n_components=n_components)
-save_path = Path("~").expanduser()
-excel_template_file = save_path.joinpath("test.xlsx")
-temp_gen.save(excel_template_file)
 
-load_path = Path("~").joinpath("test123_filled.xlsx").expanduser()
-parser = ExcelParser()
-result = parser.parse(load_path)
+template_generator = ExcelTemplateGenerator(
+    operation_mode=opm,
+    column_model=col,
+    binding_model=bim,
+    n_components=n_components,
+    component_names=["Salt", "Product", "Impurity1"],
+)
+
+save_path = Path("~").expanduser()
+excel_template_file = save_path / "test_template.xlsx"
+template_generator.save(excel_template_file)
+print(f"Template saved to: {excel_template_file}")
+
+
+filled_template_path = save_path / "test_template_filled.xlsx"
+
+
+result = parse_excel(filled_template_path)
+
 
 operation_mode = get_operation_mode(opm)
 process_list = []
+
 for exp in result.experiments:
     process = operation_mode.create_process(exp, result.column_binding)
     process_list.append(process)
+    
 
-# check if config is correct
-[p.check_config() for p in process_list]
+    print(process.check_config())
+
 
 runner = SimulationRunner()
 
-# Option A: Full storage (pickle + parquet chromatograms + H5)
-storage = FileResultsStorage(save_path.joinpath("cadet_output"))
+print("\nRunning simulations...")
+results = runner.run_batch(
+    process_list,
+    stop_on_error=False,
+    progress_callback=lambda current, total, res: print(
+        f"  [{current}/{total}] {res.experiment_name}: "
+        f"{'Success' if res.success else 'Failed'} ({res.runtime_seconds:.2f}s)"
+    ),
+)
 
-# Run simulations with H5 files in the pending directory
-# This keeps temporary files separate from finalized experiment sets
-results = runner.run_batch(process_list, h5_dir=storage.get_pending_dir(), n_cores=3)
 
-# Save experiment set - this moves H5 files from _pending to the final location
+storage_dir = save_path / "cadet_experiments"
+storage = FileStorage(storage_dir)
+
 set_id = storage.save_experiment_set(
     name="my_study",
     operation_mode=opm,
     experiments=result.experiments,
     column_binding=result.column_binding,
     results=results,
+    description="Test simulation run",
 )
-print(f"Saved to storage with ID: {set_id}")
 
-# Later, load for analysis:
-# loaded = storage.load_results_by_selection([(set_id, exp.name) for exp in result.experiments])
+# List what's stored
+df = storage.list_experiments(limit=10)
 
+# Load specific experiments
+loaded = storage.load_results_by_selection(
+    selections=[(set_id, exp.name) for exp in result.experiments],
+    include_chromatogram=True,
+)
 
-# Option B: Just Excel export (no pickle/storage)
-# Note: For standalone exports without storage, use a temp directory for H5 files
-import tempfile
-with tempfile.TemporaryDirectory() as tmpdir:
-    exporter = ResultsExporter(n_interpolation_points=500)
-    results = runner.run_batch(process_list, h5_dir=tmpdir, n_cores=3)
-    excel_path = exporter.export_simulation_results(
-        results=results,
-        experiment_configs=result.experiments,
-        column_binding=result.column_binding,
-        output_path=save_path.joinpath("cadet_output", "my_study_results.xlsx"),
-    )
-    print(f"Excel exported to: {excel_path}")
+print(f"\nLoaded {len(loaded)} experiment(s) for analysis")
+
+p = plotting.plot_chromatogram(results[0])

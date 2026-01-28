@@ -285,7 +285,7 @@ class LWEConcentrationBased(BaseOperationMode):
         process.add_event('Load', 'flow_sheet.inlet.c', c_load, time=event_times['Load'])
         process.add_event('Wash', 'flow_sheet.inlet.c', c_wash, time=event_times['Wash'])
         process.add_event('grad_start', 'flow_sheet.inlet.c', c_gradient_poly, event_times['Elution'])
-        process.add_event('grad_stop', 'flow_sheet.inlet.c', c_elution, time=event_times['Strip'])
+        process.add_event('grad_stop', 'flow_sheet.inlet.c', c_strip, time=event_times['Strip'])
         
         return process
     

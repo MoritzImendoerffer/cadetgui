@@ -11,9 +11,17 @@
       "description": "Use kinetic binding (true) or rapid equilibrium (false)"
     },
     {
+      "name": "capacity",
+      "type": "float",
+      "default": null,
+      "unit": "mM",
+      "bounds": [0, null],
+      "description": "Ion exchange capacity (Lambda) - resin property"
+    },
+    {
       "name": "reference_liquid_phase_conc",
       "type": "float",
-      "default": 1.0,
+      "default": null,
       "unit": "mM",
       "bounds": [0, null],
       "description": "Reference liquid phase concentration"
@@ -21,7 +29,7 @@
     {
       "name": "reference_solid_phase_conc",
       "type": "float",
-      "default": 1.0,
+      "default": null,
       "unit": "mM",
       "bounds": [0, null],
       "description": "Reference solid phase concentration"
@@ -39,7 +47,7 @@
     {
       "name": "adsorption_rate_linear",
       "type": "float",
-      "default": 0.0,
+      "default": null,
       "unit": "1/(mM·s)",
       "bounds": [null, null],
       "description": "Linear pH dependence of adsorption rate"
@@ -47,7 +55,7 @@
     {
       "name": "adsorption_rate_quadratic",
       "type": "float",
-      "default": 0.0,
+      "default": null,
       "unit": "1/(mM·s)",
       "bounds": [null, null],
       "description": "Quadratic pH dependence of adsorption rate"
@@ -55,7 +63,7 @@
     {
       "name": "adsorption_rate_cubic",
       "type": "float",
-      "default": 0.0,
+      "default": null,
       "unit": "1/(mM·s)",
       "bounds": [null, null],
       "description": "Cubic pH dependence of adsorption rate"
@@ -63,7 +71,7 @@
     {
       "name": "adsorption_rate_salt",
       "type": "float",
-      "default": 0.0,
+      "default": null,
       "unit": "1/(mM·s)",
       "bounds": [null, null],
       "description": "Salt dependence of adsorption rate"
@@ -71,7 +79,7 @@
     {
       "name": "adsorption_rate_protein",
       "type": "float",
-      "default": 0.0,
+      "default": null,
       "unit": "1/(mM·s)",
       "bounds": [null, null],
       "description": "Protein dependence of adsorption rate"
@@ -87,7 +95,7 @@
     {
       "name": "desorption_rate_linear",
       "type": "float",
-      "default": 0.0,
+      "default": null,
       "unit": "1/s",
       "bounds": [null, null],
       "description": "Linear pH dependence of desorption rate"
@@ -95,7 +103,7 @@
     {
       "name": "desorption_rate_quadratic",
       "type": "float",
-      "default": 0.0,
+      "default": null,
       "unit": "1/s",
       "bounds": [null, null],
       "description": "Quadratic pH dependence of desorption rate"
@@ -103,7 +111,7 @@
     {
       "name": "desorption_rate_cubic",
       "type": "float",
-      "default": 0.0,
+      "default": null,
       "unit": "1/s",
       "bounds": [null, null],
       "description": "Cubic pH dependence of desorption rate"
@@ -111,7 +119,7 @@
     {
       "name": "desorption_rate_salt",
       "type": "float",
-      "default": 0.0,
+      "default": null,
       "unit": "1/s",
       "bounds": [null, null],
       "description": "Salt dependence of desorption rate"
@@ -119,7 +127,7 @@
     {
       "name": "desorption_rate_protein",
       "type": "float",
-      "default": 0.0,
+      "default": null,
       "unit": "1/s",
       "bounds": [null, null],
       "description": "Protein dependence of desorption rate"
@@ -135,7 +143,7 @@
     {
       "name": "characteristic_charge_linear",
       "type": "float",
-      "default": 0.0,
+      "default": null,
       "unit": "-",
       "bounds": [null, null],
       "description": "Linear pH dependence of characteristic charge"
@@ -143,7 +151,7 @@
     {
       "name": "characteristic_charge_quadratic",
       "type": "float",
-      "default": 0.0,
+      "default": null,
       "unit": "-",
       "bounds": [null, null],
       "description": "Quadratic pH dependence of characteristic charge"
@@ -151,7 +159,7 @@
     {
       "name": "characteristic_charge_cubic",
       "type": "float",
-      "default": 0.0,
+      "default": null,
       "unit": "-",
       "bounds": [null, null],
       "description": "Cubic pH dependence of characteristic charge"
@@ -163,14 +171,6 @@
       "unit": "-",
       "bounds": [0, null],
       "description": "Steric factor (sigma)"
-    },
-    {
-      "name": "capacity",
-      "type": "float",
-      "default": null,
-      "unit": "mM",
-      "bounds": [0, null],
-      "description": "Ion exchange capacity (Lambda)"
     }
   ]
 }

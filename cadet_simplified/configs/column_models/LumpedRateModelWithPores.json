@@ -6,7 +6,7 @@
     {
       "name": "length",
       "type": "float",
-      "default": 0.1,
+      "default": null,
       "unit": "m",
       "bounds": [0, null],
       "description": "Column length"
@@ -14,7 +14,7 @@
     {
       "name": "diameter",
       "type": "float",
-      "default": 0.01,
+      "default": null,
       "unit": "m",
       "bounds": [0, null],
       "description": "Column diameter"
@@ -22,7 +22,7 @@
     {
       "name": "bed_porosity",
       "type": "float",
-      "default": 0.37,
+      "default": null,
       "unit": "-",
       "bounds": [0, 1],
       "description": "Interstitial (bed) porosity"
@@ -30,7 +30,7 @@
     {
       "name": "particle_porosity",
       "type": "float",
-      "default": 0.33,
+      "default": null,
       "unit": "-",
       "bounds": [0, 1],
       "description": "Intraparticle porosity"
@@ -38,7 +38,7 @@
     {
       "name": "particle_radius",
       "type": "float",
-      "default": 4.5e-5,
+      "default": null,
       "unit": "m",
       "bounds": [0, null],
       "description": "Particle radius"
@@ -46,15 +46,15 @@
     {
       "name": "axial_dispersion",
       "type": "float",
-      "default": 1e-7,
-      "unit": "m²/s",
+      "default": null,
+      "unit": "m2/s",
       "bounds": [0, null],
       "description": "Axial dispersion coefficient"
     },
     {
       "name": "flow_direction",
       "type": "int",
-      "default": 1,
+      "default": null,
       "unit": "-",
       "bounds": [-1, 1],
       "description": "Flow direction (1=forward, -1=backward)"
@@ -64,7 +64,7 @@
     {
       "name": "film_diffusion",
       "type": "float",
-      "default": 1e-5,
+      "default": null,
       "unit": "m/s",
       "bounds": [0, null],
       "description": "Film mass transfer coefficient"
@@ -72,7 +72,7 @@
     {
       "name": "pore_accessibility",
       "type": "float",
-      "default": 1.0,
+      "default": null,
       "unit": "-",
       "bounds": [0, 1],
       "description": "Fraction of pores accessible to component"

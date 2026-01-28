@@ -11,9 +11,17 @@
       "description": "Use kinetic binding (true) or rapid equilibrium (false)"
     },
     {
+      "name": "capacity",
+      "type": "float",
+      "default": null,
+      "unit": "mM",
+      "bounds": [0, null],
+      "description": "Ion exchange capacity (Lambda) - resin property"
+    },
+    {
       "name": "reference_liquid_phase_conc",
       "type": "float",
-      "default": 1.0,
+      "default": null,
       "unit": "mM",
       "bounds": [0, null],
       "description": "Reference liquid phase concentration for non-dimensionalization"
@@ -21,7 +29,7 @@
     {
       "name": "reference_solid_phase_conc",
       "type": "float",
-      "default": 1.0,
+      "default": null,
       "unit": "mM",
       "bounds": [0, null],
       "description": "Reference solid phase concentration for non-dimensionalization"
@@ -59,14 +67,6 @@
       "unit": "-",
       "bounds": [0, null],
       "description": "Steric factor (sigma) - steric shielding parameter"
-    },
-    {
-      "name": "capacity",
-      "type": "float",
-      "default": null,
-      "unit": "mM",
-      "bounds": [0, null],
-      "description": "Ion exchange capacity (Lambda)"
     }
   ]
 }

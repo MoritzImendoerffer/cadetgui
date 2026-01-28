@@ -47,7 +47,7 @@
       "name": "axial_dispersion",
       "type": "float",
       "default": null,
-      "unit": "m2/s",
+      "unit": "m²/s",
       "bounds": [0, null],
       "description": "Axial dispersion coefficient"
     },
@@ -73,7 +73,7 @@
       "name": "pore_diffusion",
       "type": "float",
       "default": null,
-      "unit": "m2/s",
+      "unit": "m²/s",
       "bounds": [0, null],
       "description": "Pore diffusion coefficient"
     },
@@ -81,7 +81,7 @@
       "name": "surface_diffusion",
       "type": "float",
       "default": null,
-      "unit": "m2/s",
+      "unit": "m²/s",
       "bounds": [0, null],
       "description": "Surface diffusion coefficient"
     },

@@ -1,7 +1,7 @@
 {
-  "name": "GeneralRateModel",
-  "cadet_class": "CADETProcess.processModel.GeneralRateModel",
-  "description": "General rate model with pore and film diffusion",
+  "name": "LumpedRateModelWithPores",
+  "cadet_class": "CADETProcess.processModel.LumpedRateModelWithPores",
+  "description": "Lumped rate model with pores (transport + kinetic resistance lumped)",
   "scalar_parameters": [
     {
       "name": "length",
@@ -47,7 +47,7 @@
       "name": "axial_dispersion",
       "type": "float",
       "default": null,
-      "unit": "m2/s",
+      "unit": "m²/s",
       "bounds": [0, null],
       "description": "Axial dispersion coefficient"
     },
@@ -68,22 +68,6 @@
       "unit": "m/s",
       "bounds": [0, null],
       "description": "Film mass transfer coefficient"
-    },
-    {
-      "name": "pore_diffusion",
-      "type": "float",
-      "default": null,
-      "unit": "m2/s",
-      "bounds": [0, null],
-      "description": "Pore diffusion coefficient"
-    },
-    {
-      "name": "surface_diffusion",
-      "type": "float",
-      "default": null,
-      "unit": "m2/s",
-      "bounds": [0, null],
-      "description": "Surface diffusion coefficient"
     },
     {
       "name": "pore_accessibility",

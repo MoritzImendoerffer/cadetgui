@@ -19,7 +19,7 @@ The interpolation is separated so it can be cached:
    >>> plot = plot_chromatogram_from_df(df)   # Fast reuse
 """
 
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING
 
 import numpy as np
 import pandas as pd
@@ -31,15 +31,10 @@ if TYPE_CHECKING:
     from ..simulation.runner import SimulationResultWrapper
 
 
-# =============================================================================
-# Interpolation utilities
-# =============================================================================
-
 def interpolate_chromatogram(
     result: "SimulationResultWrapper",
     n_points: int = 2000,
     outlet_name: str | None = None,
-    time_unit: str = "seconds",
 ) -> pd.DataFrame:
     """Extract and interpolate chromatogram from simulation result.
     
@@ -51,13 +46,11 @@ def interpolate_chromatogram(
         Number of interpolation points
     outlet_name : str, optional
         Name of outlet unit. If None, uses first product outlet.
-    time_unit : str, default="seconds"
-        Time unit for output: "seconds" or "minutes"
         
     Returns
     -------
     pd.DataFrame
-        DataFrame with columns: time, <component_names>...
+        DataFrame with columns: time (in seconds), <component_names>...
         
     Raises
     ------
@@ -99,14 +92,8 @@ def interpolate_chromatogram(
     interp_func = outlet_solution.outlet.solution_interpolated
     solution_interp = interp_func(time_interp)
     
-    # Convert time if needed
-    if time_unit == "minutes":
-        time_output = time_interp / 60.0
-    else:
-        time_output = time_interp
-    
-    # Build DataFrame
-    data = {"time": time_output}
+    # Build DataFrame (time in seconds)
+    data = {"time": time_interp}
     for i, comp in enumerate(process.component_system.components):
         comp_name = comp.name if hasattr(comp, "name") else f"Component_{i}"
         data[comp_name] = solution_interp[:, i]
@@ -137,30 +124,23 @@ def get_component_names(result: "SimulationResultWrapper") -> list[str]:
         names.append(name)
     return names
 
-
-# =============================================================================
-# Plotting from DataFrame (cached data)
-# =============================================================================
-
 def plot_chromatogram_from_df(
     df: pd.DataFrame,
     title: str = "Chromatogram",
-    time_unit: str = "auto",
     ylabel: str = "Concentration (mM)",
     width: int = 800,
     height: int = 400,
     show_legend: bool = True,
+    normalized: bool = False,
 ) -> hv.Overlay:
     """Plot chromatogram from a DataFrame.
     
     Parameters
     ----------
     df : pd.DataFrame
-        DataFrame with 'time' column and component columns
+        DataFrame with 'time' column (in seconds) and component columns
     title : str, default="Chromatogram"
         Plot title
-    time_unit : str, default="auto"
-        X-axis label: "auto" (detect from data), "seconds", "minutes"
     ylabel : str, default="Concentration (mM)"
         Y-axis label
     width : int, default=800
@@ -169,6 +149,8 @@ def plot_chromatogram_from_df(
         Plot height in pixels
     show_legend : bool, default=True
         Whether to show legend
+    normalized : bool, default=False
+        If True, normalize each component to its maximum value
         
     Returns
     -------
@@ -182,30 +164,35 @@ def plot_chromatogram_from_df(
     >>> plot  # Display in notebook
     """
     import hvplot.pandas  # noqa: F401
-    
-    # Determine time unit from data
-    if time_unit == "auto":
-        max_time = df["time"].max()
-        if max_time > 300:  # Likely seconds
-            xlabel = "Time (s)"
-        else:
-            xlabel = "Time (min)"
-    elif time_unit == "minutes":
-        xlabel = "Time (min)"
-    else:
-        xlabel = "Time (s)"
+
+    _df = df.copy()
     
     # Get component columns (everything except 'time')
-    component_cols = [c for c in df.columns if c != "time"]
+    component_cols = [c for c in _df.columns if "time" not in c.lower()]
+    time_cols = [c for c in _df.columns if "time" in c.lower()]
     
+    if not time_cols:
+        raise ValueError("No time column found in DataFrame")
     if not component_cols:
         raise ValueError("No component columns found in DataFrame")
+    
+    time_col = time_cols[0]
+    
+    # Convert time from seconds to minutes
+    _df[time_col] = _df[time_col] / 60.0
+    
+    # Normalize if requested
+    if normalized:
+        for comp in component_cols:
+            max_val = _df[comp].max()
+            if max_val > 0:
+                _df[comp] = _df[comp] / max_val
     
     # Create individual plots
     plots = []
     for comp in component_cols:
-        p = df.hvplot.line(
-            x="time",
+        p = _df.hvplot.line(
+            x=time_col,
             y=comp,
             label=comp,
         )
@@ -219,11 +206,14 @@ def plot_chromatogram_from_df(
         for p in plots[1:]:
             overlay = overlay * p
     
-    # Configure options
     legend_position = "right" if show_legend else None
     
+    # Adjust ylabel for normalized plots
+    if normalized:
+        ylabel = "Normalized Concentration (-)"
+    
     overlay = overlay.opts(
-        xlabel=xlabel,
+        xlabel="Time (min)",
         ylabel=ylabel,
         title=title,
         width=width,
@@ -240,11 +230,11 @@ def plot_chromatogram_from_df(
 def plot_chromatogram_overlay_from_df(
     chromatograms: list[tuple[str, pd.DataFrame]],
     title: str = "Chromatogram Overlay",
-    time_unit: str = "auto",
     ylabel: str = "Concentration (mM)",
     width: int = 900,
     height: int = 450,
     component_filter: list[str] | None = None,
+    normalized: bool = False,
 ) -> hv.Overlay:
     """Overlay multiple chromatograms from DataFrames.
     
@@ -254,8 +244,6 @@ def plot_chromatogram_overlay_from_df(
         List of (label, dataframe) pairs
     title : str, default="Chromatogram Overlay"
         Plot title
-    time_unit : str, default="auto"
-        X-axis label
     ylabel : str, default="Concentration (mM)"
         Y-axis label
     width : int, default=900
@@ -264,6 +252,8 @@ def plot_chromatogram_overlay_from_df(
         Plot height
     component_filter : list[str], optional
         Only plot these components. If None, plot all.
+    normalized : bool, default=False
+        If True, normalize each component to its maximum value
         
     Returns
     -------
@@ -283,24 +273,33 @@ def plot_chromatogram_overlay_from_df(
     if not chromatograms:
         raise ValueError("No chromatograms provided")
     
-    # Determine time unit from first DataFrame
-    if time_unit == "auto":
-        max_time = chromatograms[0][1]["time"].max()
-        xlabel = "Time (s)" if max_time > 300 else "Time (min)"
-    elif time_unit == "minutes":
-        xlabel = "Time (min)"
-    else:
-        xlabel = "Time (s)"
-    
     # Create plots
     plots = []
     
     for label, df in chromatograms:
+        _df = df.copy()
+        
+        # Find time column
+        time_cols = [c for c in _df.columns if "time" in c.lower()]
+        if not time_cols:
+            raise ValueError(f"No time column found in DataFrame for {label}")
+        time_col = time_cols[0]
+        
+        # Convert time from seconds to minutes
+        _df[time_col] = _df[time_col] / 60.0
+        
         # Get component columns
-        component_cols = [c for c in df.columns if c != "time"]
+        component_cols = [c for c in _df.columns if "time" not in c.lower()]
         
         if component_filter is not None:
             component_cols = [c for c in component_cols if c in component_filter]
+        
+        # Normalize if requested
+        if normalized:
+            for comp in component_cols:
+                max_val = _df[comp].max()
+                if max_val > 0:
+                    _df[comp] = _df[comp] / max_val
         
         for comp in component_cols:
             # Create label: "Experiment / Component" or just "Experiment" if single component
@@ -309,8 +308,8 @@ def plot_chromatogram_overlay_from_df(
             else:
                 full_label = label
             
-            p = df.hvplot.line(
-                x="time",
+            p = _df.hvplot.line(
+                x=time_col,
                 y=comp,
                 label=full_label,
             )
@@ -324,8 +323,12 @@ def plot_chromatogram_overlay_from_df(
     for p in plots[1:]:
         overlay = overlay * p
     
+    # Adjust ylabel for normalized plots
+    if normalized:
+        ylabel = "Normalized Concentration (-)"
+    
     overlay = overlay.opts(
-        xlabel=xlabel,
+        xlabel="Time (min)",
         ylabel=ylabel,
         title=title,
         width=width,
@@ -337,17 +340,12 @@ def plot_chromatogram_overlay_from_df(
     
     return overlay
 
-
-# =============================================================================
-# Plotting from SimulationResultWrapper (with interpolation)
-# =============================================================================
-
 def plot_chromatogram(
     result: "SimulationResultWrapper",
     n_points: int = 2000,
     outlet_name: str | None = None,
     title: str | None = None,
-    time_unit: str = "minutes",
+    normalized: bool = False,
     **kwargs,
 ) -> hv.Overlay:
     """Plot chromatogram from simulation result.
@@ -366,8 +364,8 @@ def plot_chromatogram(
         Name of outlet unit
     title : str, optional
         Plot title. If None, uses experiment name.
-    time_unit : str, default="minutes"
-        Time unit: "seconds" or "minutes"
+    normalized : bool, default=False
+        If True, normalize each component to its maximum value
     **kwargs
         Additional arguments passed to plot_chromatogram_from_df
         
@@ -387,7 +385,6 @@ def plot_chromatogram(
         result,
         n_points=n_points,
         outlet_name=outlet_name,
-        time_unit=time_unit,
     )
     
     # Set title
@@ -398,7 +395,7 @@ def plot_chromatogram(
     return plot_chromatogram_from_df(
         df,
         title=title,
-        time_unit=time_unit,
+        normalized=normalized,
         **kwargs,
     )
 
@@ -408,8 +405,8 @@ def plot_chromatogram_overlay(
     n_points: int = 2000,
     labels: list[str] | None = None,
     title: str = "Chromatogram Overlay",
-    time_unit: str = "minutes",
     component_filter: list[str] | None = None,
+    normalized: bool = False,
     **kwargs,
 ) -> hv.Overlay:
     """Overlay multiple chromatograms from simulation results.
@@ -424,10 +421,10 @@ def plot_chromatogram_overlay(
         Labels for each result. If None, uses experiment names.
     title : str, default="Chromatogram Overlay"
         Plot title
-    time_unit : str, default="minutes"
-        Time unit
     component_filter : list[str], optional
         Only plot these components
+    normalized : bool, default=False
+        If True, normalize each component to its maximum value
     **kwargs
         Additional arguments passed to plot_chromatogram_overlay_from_df
         
@@ -450,7 +447,6 @@ def plot_chromatogram_overlay(
         df = interpolate_chromatogram(
             result,
             n_points=n_points,
-            time_unit=time_unit,
         )
         chromatograms.append((label, df))
     
@@ -460,7 +456,7 @@ def plot_chromatogram_overlay(
     return plot_chromatogram_overlay_from_df(
         chromatograms,
         title=title,
-        time_unit=time_unit,
         component_filter=component_filter,
+        normalized=normalized,
         **kwargs,
     )

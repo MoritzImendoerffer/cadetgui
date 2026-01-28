@@ -31,14 +31,14 @@
       "name": "axial_dispersion",
       "type": "float",
       "default": null,
-      "unit": "m2/s",
+      "unit": "m²/s",
       "bounds": [0, null],
       "description": "Axial dispersion coefficient"
     },
     {
       "name": "flow_direction",
       "type": "int",
-      "default": null,
+      "default": 1,
       "unit": "-",
       "bounds": [-1, 1],
       "description": "Flow direction (1=forward, -1=backward)"
