@@ -19,10 +19,20 @@ Example - From cached DataFrame:
 
 Example - Inlet profile from process events:
     >>> from cadet_simplified.plotting import plot_inlet_profile
-    >>> plot = plot_inlet_profile(process, normalized=True)
+    >>> plot = plot_inlet_profile(process, normalized=True, x_axis="cv")
+
+Example - Convert time to column volumes:
+    >>> from cadet_simplified.plotting import time_to_cv, calculate_column_volume_mL
+    >>> col_vol = calculate_column_volume_mL(column_parameters)
+    >>> cv_array = time_to_cv(time_seconds, flow_rate_mL_min, col_vol)
 """
 
 from .chromatogram import (
+    # Unit conversion helpers
+    calculate_column_volume_mL,
+    time_to_cv,
+    get_column_volume_from_process,
+    get_flow_rate_from_process,
     # Interpolation
     interpolate_chromatogram,
     get_component_names,
@@ -38,6 +48,11 @@ from .chromatogram import (
 )
 
 __all__ = [
+    # Unit conversion helpers
+    "calculate_column_volume_mL",
+    "time_to_cv",
+    "get_column_volume_from_process",
+    "get_flow_rate_from_process",
     # Interpolation
     "interpolate_chromatogram",
     "get_component_names",

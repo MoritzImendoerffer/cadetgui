@@ -36,6 +36,7 @@ from .plotting import (
     plot_chromatogram_from_df,
     plot_chromatogram_overlay_from_df,
     plot_inlet_profile,
+    calculate_column_volume_mL,
 )
 
 
@@ -167,6 +168,14 @@ class SimplifiedCADETApp(param.Parameterized):
             value=False,
         )
         
+        # Dropdown for inlet plot x-axis
+        self._inlet_x_axis_select = pn.widgets.Select(
+            name="X-Axis",
+            options={"Time (min)": "minutes", "Column Volumes (CV)": "cv"},
+            value="minutes",
+            width=180,
+        )
+        
         self._validation_output = pn.Column(
             pn.pane.Markdown("*Upload a filled template to validate*"),
             sizing_mode='stretch_width',
@@ -273,7 +282,20 @@ class SimplifiedCADETApp(param.Parameterized):
                 "Individual Chromatograms": "individual",
             },
             value="overlay",
-            width=300,
+            width=200,
+        )
+        
+        # Analysis plot options
+        self._analysis_normalized_checkbox = pn.widgets.Checkbox(
+            name="Normalize",
+            value=False,
+        )
+        
+        self._analysis_x_axis_select = pn.widgets.Select(
+            name="X-Axis",
+            options={"Time (min)": "minutes", "Column Volumes (CV)": "cv"},
+            value="minutes",
+            width=180,
         )
         
         self._analyse_btn = pn.widgets.Button(
@@ -546,23 +568,33 @@ class SimplifiedCADETApp(param.Parameterized):
         
         try:
             normalized = self._inlet_normalized_checkbox.value
+            x_axis = self._inlet_x_axis_select.value
+            
             plot = plot_inlet_profile(
                 process,
                 title=f"Inlet Profile: {process.name}",
                 normalized=normalized,
+                x_axis=x_axis,
                 width=700,
                 height=350,
             )
             
-            # Watch checkbox for changes
+            # Watch widgets for changes
             def update_plot(event):
                 self._show_inlet_profile_plot()
             
-            self._inlet_normalized_checkbox.param.watch(update_plot, 'value')
+            # Only set up watchers once (check if already watching)
+            if not hasattr(self, '_inlet_watchers_set'):
+                self._inlet_normalized_checkbox.param.watch(update_plot, 'value')
+                self._inlet_x_axis_select.param.watch(update_plot, 'value')
+                self._inlet_watchers_set = True
             
             self._inlet_plot_area.objects = [
                 pn.pane.Markdown("### Inlet Concentration Profile"),
-                self._inlet_normalized_checkbox,
+                pn.Row(
+                    self._inlet_normalized_checkbox,
+                    self._inlet_x_axis_select,
+                ),
                 pn.pane.HoloViews(plot, sizing_mode='stretch_width'),
             ]
             
@@ -747,7 +779,7 @@ class SimplifiedCADETApp(param.Parameterized):
             ]
             return
         
-        # Create overlay plot
+        # Create overlay plot (preview uses minutes, no CV option)
         try:
             plot = plot_chromatogram_overlay_from_df(
                 chromatograms,
@@ -845,6 +877,24 @@ class SimplifiedCADETApp(param.Parameterized):
                 pn.pane.Markdown(f"```\n{tb}\n```"),
             ]
     
+    def _get_conversion_params(self, exp: LoadedExperiment) -> dict:
+        """Extract conversion params for an experiment (for CV calculation)."""
+        flow_rate = exp.experiment_config.parameters.get("flow_rate_mL_min")
+        
+        try:
+            column_volume_mL = calculate_column_volume_mL(
+                exp.column_binding.column_parameters
+            )
+        except (ValueError, KeyError):
+            column_volume_mL = None
+        
+        if flow_rate is not None and column_volume_mL is not None:
+            return {
+                "flow_rate_mL_min": flow_rate,
+                "column_volume_mL": column_volume_mL,
+            }
+        return None
+    
     def _run_overlay_analysis(self):
         """Create chromatogram overlay plot."""
         components = []
@@ -853,18 +903,40 @@ class SimplifiedCADETApp(param.Parameterized):
         components.append(pn.pane.Markdown("## Chromatogram Overlay"))
         components.append(pn.pane.Markdown(f"*{len(self._loaded_experiments)} experiment(s) selected*"))
         
+        # Get plot options
+        normalized = self._analysis_normalized_checkbox.value
+        x_axis = self._analysis_x_axis_select.value
+        
         # Prepare chromatograms for overlay
         chromatograms = []
+        missing_conv_params = []
+        
         for exp in self._loaded_experiments:
             if exp.chromatogram_df is not None:
                 label = f"{exp.experiment_set_name}/{exp.experiment_name}"
-                chromatograms.append((label, exp.chromatogram_df))
+                conv_params = self._get_conversion_params(exp)
+                
+                if x_axis == "cv" and conv_params is None:
+                    missing_conv_params.append(exp.experiment_name)
+                    continue
+                
+                chromatograms.append((label, exp.chromatogram_df, conv_params))
+        
+        # Warn about missing conversion params
+        if missing_conv_params:
+            components.append(pn.pane.Alert(
+                f"Cannot convert to CV for: {', '.join(missing_conv_params)} "
+                "(missing flow rate or column dimensions)",
+                alert_type="warning"
+            ))
         
         if chromatograms:
             try:
                 plot = plot_chromatogram_overlay_from_df(
                     chromatograms,
                     title="Chromatogram Overlay",
+                    normalized=normalized,
+                    x_axis=x_axis,
                     width=900,
                     height=450,
                 )
@@ -896,14 +968,38 @@ class SimplifiedCADETApp(param.Parameterized):
         components.append(pn.pane.Markdown(f"*{len(self._loaded_experiments)} experiment(s) selected*"))
         components.append(pn.layout.Divider())
         
+        # Get plot options
+        normalized = self._analysis_normalized_checkbox.value
+        x_axis = self._analysis_x_axis_select.value
+        
         for exp in self._loaded_experiments:
             components.append(pn.pane.Markdown(f"### {exp.experiment_set_name} / {exp.experiment_name}"))
             
             if exp.chromatogram_df is not None:
+                conv_params = self._get_conversion_params(exp)
+                
+                # Check if we can do CV conversion
+                if x_axis == "cv" and conv_params is None:
+                    components.append(pn.pane.Alert(
+                        "Cannot convert to CV (missing flow rate or column dimensions). Showing time.",
+                        alert_type="warning"
+                    ))
+                    actual_x_axis = "minutes"
+                    flow_rate = None
+                    col_vol = None
+                else:
+                    actual_x_axis = x_axis
+                    flow_rate = conv_params["flow_rate_mL_min"] if conv_params else None
+                    col_vol = conv_params["column_volume_mL"] if conv_params else None
+                
                 try:
                     plot = plot_chromatogram_from_df(
                         exp.chromatogram_df,
                         title=exp.experiment_name,
+                        normalized=normalized,
+                        x_axis=actual_x_axis,
+                        flow_rate_mL_min=flow_rate,
+                        column_volume_mL=col_vol,
                         width=800,
                         height=350,
                     )
@@ -1007,6 +1103,8 @@ class SimplifiedCADETApp(param.Parameterized):
             pn.pane.Markdown("## 5. Analysis"),
             pn.Row(
                 self._analysis_type_selector,
+                self._analysis_normalized_checkbox,
+                self._analysis_x_axis_select,
                 self._analyse_btn,
             ),
             pn.layout.Divider(),
