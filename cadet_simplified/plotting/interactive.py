@@ -1,7 +1,7 @@
 """Interactive chromatogram components with self-contained controls.
 
 Provides Panel-based interactive plot components that bundle controls
-(normalization, x-axis selection) with the chromatogram plot.
+(normalization, x-axis selection, dual y-axis) with the chromatogram plot.
 
 Example - Single chromatogram:
     >>> from cadet_simplified.plotting.interactive import InteractiveChromatogram
@@ -33,9 +33,10 @@ hv.extension("bokeh")
 
 
 class InteractiveChromatogram(pn.viewable.Viewer):
-    """Single chromatogram with normalize/x-axis controls.
+    """Single chromatogram with normalize/x-axis/dual-axis controls.
     
-    Controls appear above the plot and reactively update the visualization.
+    Controls appear above the plot in three horizontal cards and reactively 
+    update the visualization.
     
     Parameters
     ----------
@@ -58,6 +59,8 @@ class InteractiveChromatogram(pn.viewable.Viewer):
         objects={"Time (min)": "minutes", "Column Volumes (CV)": "cv"},
         doc="X-axis unit",
     )
+    dual_axis = param.Boolean(default=False, doc="Use separate y-axes")
+    left_axis_components = param.List(default=[], doc="Components on left y-axis")
     
     def __init__(
         self,
@@ -76,11 +79,22 @@ class InteractiveChromatogram(pn.viewable.Viewer):
         self._width = width
         self._height = height
         
+        # Get component names
+        self._component_names = self._get_component_names()
+        
+        # Set default left axis to first component
+        if self._component_names and not self.left_axis_components:
+            self.left_axis_components = [self._component_names[0]]
+        
         # Validate conversion params
         self._cv_available = self._validate_conversion_params(conversion_params)
         
         # Build controls
         self._build_controls()
+    
+    def _get_component_names(self) -> list[str]:
+        """Extract component names from DataFrame."""
+        return [c for c in self._df.columns if "time" not in c.lower()]
     
     def _validate_conversion_params(self, params: dict | None) -> bool:
         """Check if conversion params are valid for CV calculation."""
@@ -91,22 +105,44 @@ class InteractiveChromatogram(pn.viewable.Viewer):
         return flow_rate is not None and col_vol is not None and col_vol > 0
     
     def _build_controls(self):
-        """Build control widgets."""
+        """Build control widgets in three horizontal cards."""
+        # Display card
         self._normalize_checkbox = pn.widgets.Checkbox.from_param(
             self.param.normalized,
             name="Normalize",
         )
         
+        # X-Axis card
         self._x_axis_select = pn.widgets.Select.from_param(
             self.param.x_axis,
-            name="X-Axis",
-            width=180,
+            name="",
+            width=150,
         )
         
         # Disable CV option if conversion params not available
         if not self._cv_available:
             self._x_axis_select.disabled = True
             self._x_axis_select.value = "minutes"
+        
+        # Y-Axis card
+        self._dual_axis_checkbox = pn.widgets.Checkbox.from_param(
+            self.param.dual_axis,
+            name="Dual Axis",
+        )
+        
+        self._left_axis_select = pn.widgets.MultiChoice.from_param(
+            self.param.left_axis_components,
+            options=self._component_names,
+            name="Left Axis",
+            width=200,
+            solid=False,
+        )
+    
+    @param.depends("dual_axis", watch=True)
+    def _update_left_axis_visibility(self):
+        """Show/hide left axis selector based on dual axis checkbox."""
+        # This is handled in __panel__ via pn.bind
+        pass
     
     def _transform_data(self) -> pd.DataFrame:
         """Transform data based on current control settings."""
@@ -132,7 +168,7 @@ class InteractiveChromatogram(pn.viewable.Viewer):
         # Get component columns
         component_cols = [c for c in df.columns if "time" not in c.lower()]
         
-        # Normalize if requested
+        # Normalize if requested (each component to its own max)
         if self.normalized:
             for comp in component_cols:
                 max_val = df[comp].max()
@@ -141,7 +177,7 @@ class InteractiveChromatogram(pn.viewable.Viewer):
         
         return df
     
-    @param.depends("normalized", "x_axis")
+    @param.depends("normalized", "x_axis", "dual_axis", "left_axis_components")
     def _create_plot(self) -> hv.Overlay:
         """Create the plot with current settings."""
         import hvplot.pandas  # noqa: F401
@@ -163,14 +199,33 @@ class InteractiveChromatogram(pn.viewable.Viewer):
         
         ylabel = "Normalized Concentration (-)" if self.normalized else "Concentration (mM)"
         
+        # Determine which components go on which axis
+        left_components = set(self.left_axis_components) if self.dual_axis else set()
+        
         # Create plots for each component
         plots = []
         for comp in component_cols:
+            is_left = comp in left_components
+            
+            # Line style: dashed for left axis, solid for right
+            line_dash = "dashed" if is_left and self.dual_axis else "solid"
+            
             p = df.hvplot.line(
                 x=time_col,
                 y=comp,
                 label=comp,
             )
+            
+            # Apply options
+            opts_kwargs = {
+                "line_dash": line_dash,
+            }
+            
+            # Assign to right axis if dual axis enabled and not a left component
+            if self.dual_axis and not is_left:
+                opts_kwargs["yaxis"] = "right"
+            
+            p = p.opts(**opts_kwargs)
             plots.append(p)
         
         # Overlay
@@ -181,18 +236,25 @@ class InteractiveChromatogram(pn.viewable.Viewer):
             for p in plots[1:]:
                 overlay = overlay * p
         
-        overlay = overlay.opts(
-            xlabel=xlabel,
-            ylabel=ylabel,
-            title=self._title,
-            width=self._width,
-            height=self._height,
-            legend_position="right",
-            show_legend=True,
-            framewise=True,  # Recalculate axis ranges when data changes
-            tools=["hover", "pan", "wheel_zoom", "box_zoom", "reset", "save"],
-            active_tools=["wheel_zoom"],
-        )
+        # Base options
+        opts_kwargs = {
+            "xlabel": xlabel,
+            "ylabel": ylabel,
+            "title": self._title,
+            "width": self._width,
+            "height": self._height,
+            "legend_position": "right",
+            "show_legend": True,
+            "framewise": True,
+            "tools": ["hover", "pan", "wheel_zoom", "box_zoom", "reset", "save"],
+            "active_tools": ["wheel_zoom"],
+        }
+        
+        # Enable multi_y if dual axis
+        if self.dual_axis:
+            opts_kwargs["multi_y"] = True
+        
+        overlay = overlay.opts(**opts_kwargs)
         
         return overlay
     
@@ -205,22 +267,54 @@ class InteractiveChromatogram(pn.viewable.Viewer):
         return {
             "normalized": self.normalized,
             "x_axis": self.x_axis,
+            "dual_axis": self.dual_axis,
+            "left_axis_components": self.left_axis_components,
             "title": self._title,
             "cv_available": self._cv_available,
         }
     
     def __panel__(self):
         """Return the Panel layout."""
-        controls = pn.Row(
+        # Display card
+        display_card = pn.Card(
             self._normalize_checkbox,
-            pn.Spacer(width=20),
-            self._x_axis_select,
-            align="start",
+            title="Display",
+            sizing_mode="fixed",
+            width=120,
         )
         
-        controls_card = pn.Card(
-            controls,
-            hide_header=True,
+        # X-Axis card
+        x_axis_card = pn.Card(
+            self._x_axis_select,
+            title="X-Axis",
+            sizing_mode="fixed",
+            width=180,
+        )
+        
+        # Y-Axis card content (dynamic based on dual_axis)
+        def y_axis_content():
+            if self.dual_axis:
+                return pn.Column(
+                    self._dual_axis_checkbox,
+                    self._left_axis_select,
+                    sizing_mode="stretch_width",
+                )
+            else:
+                return pn.Column(
+                    self._dual_axis_checkbox,
+                    sizing_mode="stretch_width",
+                )
+        
+        y_axis_card = pn.Card(
+            pn.bind(lambda _: y_axis_content(), self.param.dual_axis),
+            title="Y-Axis",
+            sizing_mode="stretch_width",
+        )
+        
+        controls = pn.Row(
+            display_card,
+            x_axis_card,
+            y_axis_card,
             sizing_mode="stretch_width",
         )
         
@@ -230,7 +324,7 @@ class InteractiveChromatogram(pn.viewable.Viewer):
         )
         
         return pn.Column(
-            controls_card,
+            controls,
             plot_pane,
             sizing_mode="stretch_width",
         )
@@ -239,9 +333,10 @@ class InteractiveChromatogram(pn.viewable.Viewer):
 class InteractiveChromatogramOverlay(pn.viewable.Viewer):
     """Multiple chromatograms with shared controls.
     
-    Controls appear above the plot. When CV mode is selected, each experiment
-    is converted using its own conversion parameters. If any experiment lacks
-    parameters, a warning is shown and the plot falls back to minutes.
+    Controls appear above the plot in three horizontal cards. When CV mode is 
+    selected, each experiment is converted using its own conversion parameters. 
+    If any experiment lacks parameters, a warning is shown and the plot falls 
+    back to minutes.
     
     Parameters
     ----------
@@ -267,6 +362,8 @@ class InteractiveChromatogramOverlay(pn.viewable.Viewer):
         objects={"Time (min)": "minutes", "Column Volumes (CV)": "cv"},
         doc="X-axis unit",
     )
+    dual_axis = param.Boolean(default=False, doc="Use separate y-axes")
+    left_axis_components = param.List(default=[], doc="Components on left y-axis")
     
     def __init__(
         self,
@@ -285,11 +382,32 @@ class InteractiveChromatogramOverlay(pn.viewable.Viewer):
         self._width = width
         self._height = height
         
+        # Get union of all component names
+        self._component_names = self._get_all_component_names()
+        
+        # Set default left axis to first component
+        if self._component_names and not self.left_axis_components:
+            self.left_axis_components = [self._component_names[0]]
+        
         # Check which experiments have valid conversion params
         self._cv_status = self._check_cv_availability()
         
         # Build controls
         self._build_controls()
+    
+    def _get_all_component_names(self) -> list[str]:
+        """Get union of all component names across chromatograms."""
+        all_names = set()
+        for label, df, params in self._chromatograms:
+            component_cols = [c for c in df.columns if "time" not in c.lower()]
+            all_names.update(component_cols)
+        
+        # Apply filter if specified
+        if self._component_filter is not None:
+            all_names = all_names & set(self._component_filter)
+        
+        # Return sorted list for consistent ordering
+        return sorted(list(all_names))
     
     def _check_cv_availability(self) -> dict:
         """Check CV availability for each experiment."""
@@ -315,22 +433,38 @@ class InteractiveChromatogramOverlay(pn.viewable.Viewer):
         return status
     
     def _build_controls(self):
-        """Build control widgets."""
+        """Build control widgets in three horizontal cards."""
+        # Display card
         self._normalize_checkbox = pn.widgets.Checkbox.from_param(
             self.param.normalized,
             name="Normalize",
         )
         
+        # X-Axis card
         self._x_axis_select = pn.widgets.Select.from_param(
             self.param.x_axis,
-            name="X-Axis",
-            width=180,
+            name="",
+            width=150,
         )
         
         # Disable CV option if no experiments have conversion params
         if not self._cv_status["any_available"]:
             self._x_axis_select.disabled = True
             self._x_axis_select.value = "minutes"
+        
+        # Y-Axis card
+        self._dual_axis_checkbox = pn.widgets.Checkbox.from_param(
+            self.param.dual_axis,
+            name="Dual Axis",
+        )
+        
+        self._left_axis_select = pn.widgets.MultiChoice.from_param(
+            self.param.left_axis_components,
+            options=self._component_names,
+            name="Left Axis",
+            width=200,
+            solid=False,
+        )
         
         # Warning pane (shown when CV selected but some missing)
         self._warning_pane = pn.pane.Alert(
@@ -358,7 +492,7 @@ class InteractiveChromatogramOverlay(pn.viewable.Viewer):
         else:
             self._warning_pane.visible = False
     
-    @param.depends("normalized", "x_axis")
+    @param.depends("normalized", "x_axis", "dual_axis", "left_axis_components")
     def _create_plot(self) -> hv.Overlay:
         """Create the overlay plot with current settings."""
         import hvplot.pandas  # noqa: F401
@@ -375,6 +509,9 @@ class InteractiveChromatogramOverlay(pn.viewable.Viewer):
             xlabel = "Time (min)"
         
         ylabel = "Normalized Concentration (-)" if self.normalized else "Concentration (mM)"
+        
+        # Determine which components go on which axis
+        left_components = set(self.left_axis_components) if self.dual_axis else set()
         
         plots = []
         
@@ -405,7 +542,7 @@ class InteractiveChromatogramOverlay(pn.viewable.Viewer):
             if self._component_filter is not None:
                 component_cols = [c for c in component_cols if c in self._component_filter]
             
-            # Normalize if requested
+            # Normalize if requested (each component to its own max)
             if self.normalized:
                 for comp in component_cols:
                     max_val = _df[comp].max()
@@ -415,11 +552,27 @@ class InteractiveChromatogramOverlay(pn.viewable.Viewer):
             # Create plot for each component
             for comp in component_cols:
                 full_label = f"{label} - {comp}"
+                is_left = comp in left_components
+                
+                # Line style: dashed for left axis, solid for right
+                line_dash = "dashed" if is_left and self.dual_axis else "solid"
+                
                 p = _df.hvplot.line(
                     x=time_col,
                     y=comp,
                     label=full_label,
                 )
+                
+                # Apply options
+                opts_kwargs = {
+                    "line_dash": line_dash,
+                }
+                
+                # Assign to right axis if dual axis enabled and not a left component
+                if self.dual_axis and not is_left:
+                    opts_kwargs["yaxis"] = "right"
+                
+                p = p.opts(**opts_kwargs)
                 plots.append(p)
         
         if not plots:
@@ -435,18 +588,25 @@ class InteractiveChromatogramOverlay(pn.viewable.Viewer):
         for p in plots[1:]:
             overlay = overlay * p
         
-        overlay = overlay.opts(
-            xlabel=xlabel,
-            ylabel=ylabel,
-            title=self._title,
-            width=self._width,
-            height=self._height,
-            legend_position="right",
-            show_legend=True,
-            framewise=True,  # Recalculate axis ranges when data changes
-            tools=["hover", "pan", "wheel_zoom", "box_zoom", "reset", "save"],
-            active_tools=["wheel_zoom"],
-        )
+        # Base options
+        opts_kwargs = {
+            "xlabel": xlabel,
+            "ylabel": ylabel,
+            "title": self._title,
+            "width": self._width,
+            "height": self._height,
+            "legend_position": "right",
+            "show_legend": True,
+            "framewise": True,
+            "tools": ["hover", "pan", "wheel_zoom", "box_zoom", "reset", "save"],
+            "active_tools": ["wheel_zoom"],
+        }
+        
+        # Enable multi_y if dual axis
+        if self.dual_axis:
+            opts_kwargs["multi_y"] = True
+        
+        overlay = overlay.opts(**opts_kwargs)
         
         return overlay
     
@@ -460,6 +620,8 @@ class InteractiveChromatogramOverlay(pn.viewable.Viewer):
             "normalized": self.normalized,
             "x_axis": self.x_axis,
             "effective_x_axis": self._get_effective_x_axis(),
+            "dual_axis": self.dual_axis,
+            "left_axis_components": self.left_axis_components,
             "title": self._title,
             "n_experiments": len(self._chromatograms),
             "cv_status": self._cv_status,
@@ -467,17 +629,46 @@ class InteractiveChromatogramOverlay(pn.viewable.Viewer):
     
     def __panel__(self):
         """Return the Panel layout."""
-        controls = pn.Row(
+        # Display card
+        display_card = pn.Card(
             self._normalize_checkbox,
-            pn.Spacer(width=20),
-            self._x_axis_select,
-            align="start",
+            title="Display",
+            sizing_mode="fixed",
+            width=120,
         )
         
-        controls_card = pn.Card(
-            controls,
-            self._warning_pane,
-            hide_header=True,
+        # X-Axis card
+        x_axis_card = pn.Card(
+            self._x_axis_select,
+            title="X-Axis",
+            sizing_mode="fixed",
+            width=180,
+        )
+        
+        # Y-Axis card content (dynamic based on dual_axis)
+        def y_axis_content():
+            if self.dual_axis:
+                return pn.Column(
+                    self._dual_axis_checkbox,
+                    self._left_axis_select,
+                    sizing_mode="stretch_width",
+                )
+            else:
+                return pn.Column(
+                    self._dual_axis_checkbox,
+                    sizing_mode="stretch_width",
+                )
+        
+        y_axis_card = pn.Card(
+            pn.bind(lambda _: y_axis_content(), self.param.dual_axis),
+            title="Y-Axis",
+            sizing_mode="stretch_width",
+        )
+        
+        controls = pn.Row(
+            display_card,
+            x_axis_card,
+            y_axis_card,
             sizing_mode="stretch_width",
         )
         
@@ -487,7 +678,8 @@ class InteractiveChromatogramOverlay(pn.viewable.Viewer):
         )
         
         return pn.Column(
-            controls_card,
+            controls,
+            self._warning_pane,
             plot_pane,
             sizing_mode="stretch_width",
         )
