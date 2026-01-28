@@ -6,7 +6,7 @@ A streamlined interface with Excel-based configuration:
 3. Upload filled template
 4. Validate and simulate
 5. Browse saved experiments
-6. Analyse selected experiments
+6. Analyse selected experiments (with interactive plots and HTML export)
 
 Run with:
     panel serve app.py --show --autoreload
@@ -37,7 +37,10 @@ from .plotting import (
     plot_chromatogram_overlay_from_df,
     plot_inlet_profile,
     calculate_column_volume_mL,
+    InteractiveChromatogram,
+    InteractiveChromatogramOverlay,
 )
+from .analysis import AnalysisView
 
 
 # Maximum number of chromatograms to preview in Saved tab
@@ -53,7 +56,7 @@ class SimplifiedCADETApp(param.Parameterized):
     3. Upload: Upload filled template, validate
     4. Simulate: Run simulations, view results
     5. Saved: Browse and select saved experiments
-    6. Analysis: Analyze selected experiments
+    6. Analysis: Analyze selected experiments (with interactive plots and export)
     """
     
     # Configuration parameters
@@ -103,6 +106,7 @@ class SimplifiedCADETApp(param.Parameterized):
         
         # Analysis state
         self._loaded_experiments: list[LoadedExperiment] = []
+        self._analysis_view: AnalysisView | None = None
         
         # Build UI components
         self._build_ui()
@@ -285,19 +289,6 @@ class SimplifiedCADETApp(param.Parameterized):
             width=200,
         )
         
-        # Analysis plot options
-        self._analysis_normalized_checkbox = pn.widgets.Checkbox(
-            name="Normalize",
-            value=False,
-        )
-        
-        self._analysis_x_axis_select = pn.widgets.Select(
-            name="X-Axis",
-            options={"Time (min)": "minutes", "Column Volumes (CV)": "cv"},
-            value="minutes",
-            width=180,
-        )
-        
         self._analyse_btn = pn.widgets.Button(
             name="Run Analysis",
             button_type="success",
@@ -305,6 +296,21 @@ class SimplifiedCADETApp(param.Parameterized):
             disabled=True,
         )
         self._analyse_btn.on_click(self._on_analyse)
+        
+        # Download button placeholder (will be replaced after analysis)
+        self._download_report_btn = pn.widgets.Button(
+            name="Download Report",
+            button_type="primary",
+            width=150,
+            disabled=True,
+        )
+        
+        # Container for download widget (replaced after each analysis)
+        self._download_widget_container = pn.Column(
+            self._download_report_btn,
+            sizing_mode='fixed',
+            width=160,
+        )
         
         self._analysis_container = pn.Column(
             pn.pane.Markdown("*Load experiments from the 'Saved' tab first*"),
@@ -848,6 +854,16 @@ class SimplifiedCADETApp(param.Parameterized):
                 pn.pane.Markdown(f"**{n_loaded} experiment(s) loaded.** Select analysis type and click 'Run Analysis'."),
             ]
             
+            # Reset download button until analysis is run
+            self._download_widget_container.objects = [
+                pn.widgets.Button(
+                    name="Download Report",
+                    button_type="primary",
+                    width=150,
+                    disabled=True,
+                )
+            ]
+            
         except Exception as e:
             self._load_progress.visible = False
             self._loaded_info.object = f"*Error loading experiments: {e}*"
@@ -864,10 +880,30 @@ class SimplifiedCADETApp(param.Parameterized):
         analysis_type = self._analysis_type_selector.value
         
         try:
+            # Create a new AnalysisView
+            self._analysis_view = AnalysisView(
+                title="Chromatography Analysis Report",
+                author="CADET Simplified",
+                description=f"Analysis of {len(self._loaded_experiments)} experiment(s)",
+            )
+            
             if analysis_type == "overlay":
-                self._run_overlay_analysis()
+                self._build_overlay_analysis()
             else:
-                self._run_individual_analysis()
+                self._build_individual_analysis()
+            
+            # Display the view
+            self._analysis_container.objects = [self._analysis_view.view()]
+            
+            # Update download button with the actual download widget
+            download_widget = self._analysis_view.download_widget(
+                filename=f"analysis_report_{datetime.now().strftime('%Y%m%d_%H%M%S')}.html",
+                label="Download Report",
+            )
+            self._download_widget_container.objects = [download_widget]
+            
+            self.status = "Analysis complete. Use controls on plots to adjust view, or download the report."
+            self._update_status("success")
                 
         except Exception as e:
             import traceback
@@ -876,8 +912,10 @@ class SimplifiedCADETApp(param.Parameterized):
                 pn.pane.Alert(f"Analysis error: {e}", alert_type="danger"),
                 pn.pane.Markdown(f"```\n{tb}\n```"),
             ]
+            self.status = f"Analysis error: {e}"
+            self._update_status("danger")
     
-    def _get_conversion_params(self, exp: LoadedExperiment) -> dict:
+    def _get_conversion_params(self, exp: LoadedExperiment) -> dict | None:
         """Extract conversion params for an experiment (for CV calculation)."""
         flow_rate = exp.experiment_config.parameters.get("flow_rate_mL_min")
         
@@ -895,123 +933,72 @@ class SimplifiedCADETApp(param.Parameterized):
             }
         return None
     
-    def _run_overlay_analysis(self):
-        """Create chromatogram overlay plot."""
-        components = []
+    def _build_overlay_analysis(self):
+        """Build overlay analysis using AnalysisView and InteractiveChromatogramOverlay."""
+        view = self._analysis_view
         
         # Header
-        components.append(pn.pane.Markdown("## Chromatogram Overlay"))
-        components.append(pn.pane.Markdown(f"*{len(self._loaded_experiments)} experiment(s) selected*"))
-        
-        # Get plot options
-        normalized = self._analysis_normalized_checkbox.value
-        x_axis = self._analysis_x_axis_select.value
+        view.add_title("Chromatogram Overlay Analysis", level=2)
+        view.add_text(f"*{len(self._loaded_experiments)} experiment(s) selected*")
         
         # Prepare chromatograms for overlay
         chromatograms = []
-        missing_conv_params = []
         
         for exp in self._loaded_experiments:
             if exp.chromatogram_df is not None:
                 label = f"{exp.experiment_set_name}/{exp.experiment_name}"
                 conv_params = self._get_conversion_params(exp)
-                
-                if x_axis == "cv" and conv_params is None:
-                    missing_conv_params.append(exp.experiment_name)
-                    continue
-                
                 chromatograms.append((label, exp.chromatogram_df, conv_params))
         
-        # Warn about missing conversion params
-        if missing_conv_params:
-            components.append(pn.pane.Alert(
-                f"Cannot convert to CV for: {', '.join(missing_conv_params)} "
-                "(missing flow rate or column dimensions)",
-                alert_type="warning"
-            ))
-        
         if chromatograms:
-            try:
-                plot = plot_chromatogram_overlay_from_df(
-                    chromatograms,
-                    title="Chromatogram Overlay",
-                    normalized=normalized,
-                    x_axis=x_axis,
-                    width=900,
-                    height=450,
-                )
-                components.append(pn.pane.HoloViews(plot, sizing_mode='stretch_width'))
-            except Exception as e:
-                components.append(pn.pane.Alert(f"Could not create plot: {e}", alert_type="warning"))
+            # Create interactive overlay with self-contained controls
+            interactive_plot = InteractiveChromatogramOverlay(
+                chromatograms=chromatograms,
+                title="Chromatogram Overlay",
+                width=900,
+                height=450,
+            )
+            view.add_plot(interactive_plot, height=500)
         else:
-            components.append(pn.pane.Alert("No chromatogram data available", alert_type="info"))
+            view.add_alert("No chromatogram data available", alert_type="info")
         
-        components.append(pn.layout.Divider())
-        
-        # Summary table
-        components.append(pn.pane.Markdown("### Selected Experiments"))
+        # Summary section
+        view.add_section("Selected Experiments")
         summary_df = self._create_summary_table()
-        components.append(pn.widgets.Tabulator(
-            summary_df,
-            height=min(200, 50 + len(self._loaded_experiments) * 30),
-            sizing_mode='stretch_width',
-            disabled=True,
-        ))
-        
-        self._analysis_container.objects = components
+        view.add_table(summary_df, height=min(250, 50 + len(self._loaded_experiments) * 30))
     
-    def _run_individual_analysis(self):
-        """Create individual chromatogram plots."""
-        components = []
+    def _build_individual_analysis(self):
+        """Build individual chromatogram analysis using AnalysisView and InteractiveChromatogram."""
+        view = self._analysis_view
         
-        components.append(pn.pane.Markdown("## Individual Chromatograms"))
-        components.append(pn.pane.Markdown(f"*{len(self._loaded_experiments)} experiment(s) selected*"))
-        components.append(pn.layout.Divider())
-        
-        # Get plot options
-        normalized = self._analysis_normalized_checkbox.value
-        x_axis = self._analysis_x_axis_select.value
+        # Header
+        view.add_title("Individual Chromatogram Analysis", level=2)
+        view.add_text(f"*{len(self._loaded_experiments)} experiment(s) selected*")
         
         for exp in self._loaded_experiments:
-            components.append(pn.pane.Markdown(f"### {exp.experiment_set_name} / {exp.experiment_name}"))
+            view.add_section(f"{exp.experiment_set_name} / {exp.experiment_name}")
             
             if exp.chromatogram_df is not None:
                 conv_params = self._get_conversion_params(exp)
                 
-                # Check if we can do CV conversion
-                if x_axis == "cv" and conv_params is None:
-                    components.append(pn.pane.Alert(
-                        "Cannot convert to CV (missing flow rate or column dimensions). Showing time.",
-                        alert_type="warning"
-                    ))
-                    actual_x_axis = "minutes"
-                    flow_rate = None
-                    col_vol = None
-                else:
-                    actual_x_axis = x_axis
-                    flow_rate = conv_params["flow_rate_mL_min"] if conv_params else None
-                    col_vol = conv_params["column_volume_mL"] if conv_params else None
-                
-                try:
-                    plot = plot_chromatogram_from_df(
-                        exp.chromatogram_df,
-                        title=exp.experiment_name,
-                        normalized=normalized,
-                        x_axis=actual_x_axis,
-                        flow_rate_mL_min=flow_rate,
-                        column_volume_mL=col_vol,
-                        width=800,
-                        height=350,
-                    )
-                    components.append(pn.pane.HoloViews(plot, sizing_mode='stretch_width'))
-                except Exception as e:
-                    components.append(pn.pane.Alert(f"Could not create plot: {e}", alert_type="warning"))
+                # Create interactive chromatogram with self-contained controls
+                interactive_plot = InteractiveChromatogram(
+                    df=exp.chromatogram_df,
+                    title=exp.experiment_name,
+                    conversion_params=conv_params,
+                    width=800,
+                    height=350,
+                )
+                view.add_plot(interactive_plot, height=400)
             else:
-                components.append(pn.pane.Alert("No chromatogram data available", alert_type="info"))
+                view.add_alert("No chromatogram data available", alert_type="info")
             
-            components.append(pn.Spacer(height=20))
+            view.add_spacer(height=10)
         
-        self._analysis_container.objects = components
+        # Summary section at the end
+        view.add_section("Summary")
+        summary_df = self._create_summary_table()
+        view.add_table(summary_df, height=min(250, 50 + len(self._loaded_experiments) * 30))
     
     def _create_summary_table(self) -> pd.DataFrame:
         """Create summary table of selected experiments."""
@@ -1098,14 +1085,15 @@ class SimplifiedCADETApp(param.Parameterized):
             sizing_mode='stretch_width',
         )
         
-        # Tab 5: Analysis
+        # Tab 5: Analysis (simplified controls - normalize/x-axis are now in interactive plots)
         analysis_tab = pn.Column(
             pn.pane.Markdown("## 5. Analysis"),
             pn.Row(
                 self._analysis_type_selector,
-                self._analysis_normalized_checkbox,
-                self._analysis_x_axis_select,
                 self._analyse_btn,
+                pn.Spacer(width=20),
+                self._download_widget_container,
+                align="center",
             ),
             pn.layout.Divider(),
             self._analysis_container,
