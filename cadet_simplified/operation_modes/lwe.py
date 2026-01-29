@@ -155,7 +155,7 @@ class LWEConcentrationBased(BaseOperationMode):
             ProcessParameterDef(
                 name="load_concentration",
                 display_name="Load Concentration",
-                unit="g/L",
+                unit="mM",
                 description="Concentration in the load (feed)",
                 default=1.0,
                 per_component=True,
