@@ -14,9 +14,14 @@ Run with:
 Or programmatically:
     from cadet_simplified.app import serve
     serve(port=5006)
+    
+Or from JupyterHub/Lab:
+    from cadet_simplified import launch_gui
+    server = launch_gui()
 """
 
 import io
+import threading
 from pathlib import Path
 from datetime import datetime
 
@@ -81,6 +86,13 @@ class SimplifiedCADETApp(param.Parameterized):
         doc="Number of components (including salt)",
     )
     
+    # Simulation parameters
+    n_cores = param.Integer(
+        default=10,
+        bounds=(1, 32),
+        doc="Number of parallel workers for simulation",
+    )
+    
     # Status
     status = param.String(default="Ready. Configure models and download template.")
     
@@ -103,6 +115,10 @@ class SimplifiedCADETApp(param.Parameterized):
         self._simulation_results: list[SimulationResultWrapper] = []
         self._component_names: list[str] = self._default_component_names()
         self._validated_processes: list = []  # Store validated processes for simulation
+        
+        # Simulation control state
+        self._stop_event: threading.Event = threading.Event()
+        self._simulation_running: bool = False
         
         # Analysis state
         self._loaded_experiments: list[LoadedExperiment] = []
@@ -207,10 +223,24 @@ class SimplifiedCADETApp(param.Parameterized):
         self._simulate_btn = pn.widgets.Button(
             name="Run Simulations",
             button_type="success",
-            width=200,
+            width=150,
             disabled=True,
         )
         self._simulate_btn.on_click(self._on_simulate)
+        
+        self._stop_btn = pn.widgets.Button(
+            name="Stop",
+            button_type="danger",
+            width=80,
+            disabled=True,
+        )
+        self._stop_btn.on_click(self._on_stop_simulations)
+        
+        self._n_cores_input = pn.widgets.IntInput.from_param(
+            self.param.n_cores,
+            name="Parallel workers",
+            width=120,
+        )
         
         self._simulation_progress = pn.indicators.Progress(
             name='Simulation Progress',
@@ -610,7 +640,7 @@ class SimplifiedCADETApp(param.Parameterized):
             ]
     
     def _on_simulate(self, event):
-        """Run simulations using run_batch with progress callback."""
+        """Run simulations using run_batch_interruptible with progress callback."""
         if self._current_parse_result is None:
             return
         
@@ -629,6 +659,13 @@ class SimplifiedCADETApp(param.Parameterized):
             self._update_status("warning")
             return
         
+        # Reset stop event and update UI state
+        self._stop_event.clear()
+        self._simulation_running = True
+        self._simulate_btn.disabled = True
+        self._stop_btn.disabled = False
+        self._n_cores_input.disabled = True
+        
         self._simulation_progress.visible = True
         self._simulation_progress.value = 0
         self._simulation_status_text.object = ""
@@ -638,7 +675,7 @@ class SimplifiedCADETApp(param.Parameterized):
         
         n_total = len(valid_processes)
         
-        # Progress callback for run_batch
+        # Progress callback for run_batch_interruptible
         def progress_callback(current, total, sim_result):
             progress = int((current / total) * 100)
             self._simulation_progress.value = progress
@@ -652,6 +689,13 @@ class SimplifiedCADETApp(param.Parameterized):
                         alert_type="success"
                     )
                 )
+            elif "Terminated" in str(sim_result.errors) or "Cancelled" in str(sim_result.errors):
+                output_items.append(
+                    pn.pane.Alert(
+                        f"{sim_result.experiment_name}: {sim_result.errors[0]}",
+                        alert_type="warning"
+                    )
+                )
             else:
                 error_msg = "; ".join(sim_result.errors[:2]) if sim_result.errors else "Unknown error"
                 output_items.append(
@@ -662,19 +706,33 @@ class SimplifiedCADETApp(param.Parameterized):
                 )
             self._simulation_output.objects = output_items
         
-        # Run batch simulation
-        self._simulation_results = self.runner.run_batch(
+        # Run batch simulation with interruptible method
+        self._simulation_results = self.runner.run_batch_interruptible(
             valid_processes,
+            n_cores=self.n_cores,
             progress_callback=progress_callback,
+            stop_event=self._stop_event,
         )
+        
+        # Reset UI state
+        self._simulation_running = False
+        self._simulate_btn.disabled = False
+        self._stop_btn.disabled = True
+        self._n_cores_input.disabled = False
         
         self._simulation_progress.value = 100
         self._simulation_progress.visible = False
         self._simulation_status_text.object = ""
         
         successful = sum(1 for r in self._simulation_results if r.success)
-        self.status = f"Completed: {successful}/{n_total} simulations successful."
-        self._update_status("success" if successful == n_total else "warning")
+        cancelled = sum(1 for r in self._simulation_results if "Cancelled" in str(r.errors) or "Terminated" in str(r.errors))
+        
+        if self._stop_event.is_set():
+            self.status = f"Stopped: {successful}/{n_total} completed, {cancelled} cancelled."
+            self._update_status("warning")
+        else:
+            self.status = f"Completed: {successful}/{n_total} simulations successful."
+            self._update_status("success" if successful == n_total else "warning")
         
         # Save to storage if any successful
         if successful > 0:
@@ -709,6 +767,14 @@ class SimplifiedCADETApp(param.Parameterized):
                     alert_type="warning"
                 ))
                 self._simulation_output.objects = output_items
+    
+    def _on_stop_simulations(self, event):
+        """Handle stop button click."""
+        if self._simulation_running:
+            self._stop_event.set()
+            self._stop_btn.name = "Stopping..."
+            self._stop_btn.disabled = True
+            self._simulation_status_text.object = "**Stopping simulations...**"
     
     def _on_refresh_saved(self, event):
         """Refresh saved experiments table."""
@@ -1062,10 +1128,16 @@ class SimplifiedCADETApp(param.Parameterized):
             sizing_mode='stretch_width',
         )
         
-        # Tab 3: Simulate
+        # Tab 3: Simulate (with stop button and n_cores)
         simulate_tab = pn.Column(
             pn.pane.Markdown("## 3. Run Simulations"),
-            pn.Row(self._simulate_btn),
+            pn.Row(
+                self._simulate_btn,
+                self._stop_btn,
+                pn.Spacer(width=20),
+                self._n_cores_input,
+                align="center",
+            ),
             self._simulation_progress,
             self._simulation_status_text,
             self._simulation_output,
