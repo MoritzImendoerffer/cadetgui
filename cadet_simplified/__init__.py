@@ -1,4 +1,4 @@
-__version__ = "0.2.1"
+__version__ = "0.2.2"
 
 # Core dataclasses
 from .core import (
@@ -56,6 +56,12 @@ from .plotting import (
     plot_chromatogram_overlay_from_df,
 )
 
+# Launcher
+from .launcher import (
+    launch_gui,
+    GUIServer,
+)
+
 __all__ = [
     # Version
     "__version__",
@@ -94,6 +100,9 @@ __all__ = [
     "plot_chromatogram_from_df",
     "plot_chromatogram_overlay",
     "plot_chromatogram_overlay_from_df",
+    # Launcher
+    "launch_gui",
+    "GUIServer",
 ]
 
 
